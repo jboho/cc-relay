@@ -146,7 +146,7 @@ describe("acceptInbound", () => {
     expect(acceptInbound(frame(bob, bob, bobMsg), ctx).ok).toBe(true);
   });
 
-  test("rejects a non-finite ctx.now instead of silently disabling stale/replay checks", () => {
+  test("throws on a non-finite ctx.now instead of silently disabling stale/replay checks", () => {
     const f = frame(alice, alice, inner(alice));
     expect(() => acceptInbound(f, context({ now: Number.NaN }))).toThrow(RangeError);
     expect(() => acceptInbound(f, context({ now: undefined as unknown as number }))).toThrow(RangeError);
