@@ -57,7 +57,7 @@ describe("acceptInbound", () => {
     expect(result).toEqual({ ok: true, peer: asPeer(alice), message: msg });
   });
 
-  test("drops an unknown sender before any decryption", () => {
+  test("drops a frame from an unknown sender", () => {
     const stranger = generateIdentity("stranger");
     const result = acceptInbound(frame(stranger, stranger, inner(stranger)), context());
     expect(result).toEqual({ ok: false, reason: "unknown_sender" });
@@ -83,9 +83,11 @@ describe("acceptInbound", () => {
     const early = inner(alice, { ts: NOW - MAX_SKEW_MS - 1 });
     const late = inner(alice, { ts: NOW + MAX_SKEW_MS + 1 });
     const edge = inner(alice, { ts: NOW - MAX_SKEW_MS });
+    const upperEdge = inner(alice, { ts: NOW + MAX_SKEW_MS });
     expect(acceptInbound(frame(alice, alice, early), context())).toEqual({ ok: false, reason: "stale" });
     expect(acceptInbound(frame(alice, alice, late), context())).toEqual({ ok: false, reason: "stale" });
     expect(acceptInbound(frame(alice, alice, edge), context()).ok).toBe(true);
+    expect(acceptInbound(frame(alice, alice, upperEdge), context()).ok).toBe(true);
   });
 
   test("drops a replay of the same message", () => {
@@ -142,5 +144,11 @@ describe("acceptInbound", () => {
     const bobMsg = inner(bob, { id });
     expect(acceptInbound(frame(alice, alice, aliceMsg), ctx).ok).toBe(true);
     expect(acceptInbound(frame(bob, bob, bobMsg), ctx).ok).toBe(true);
+  });
+
+  test("rejects a non-finite ctx.now instead of silently disabling stale/replay checks", () => {
+    const f = frame(alice, alice, inner(alice));
+    expect(() => acceptInbound(f, context({ now: Number.NaN }))).toThrow(RangeError);
+    expect(() => acceptInbound(f, context({ now: undefined as unknown as number }))).toThrow(RangeError);
   });
 });

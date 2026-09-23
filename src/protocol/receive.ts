@@ -38,6 +38,11 @@ export const MAX_SKEW_MS = 5 * 60_000;
 export const SEEN_TTL_MS = 2 * MAX_SKEW_MS + 1000;
 
 export function acceptInbound(frame: InboundFrame, ctx: ReceiveContext): Acceptance {
+  // A NaN or undefined clock silently disables both the stale check and the
+  // replay guard, and the function would then return ok:true. A wiring bug
+  // has to throw, the same way envelope's assertBoxKeys does.
+  if (!Number.isFinite(ctx.now)) throw new RangeError("acceptInbound: ctx.now must be a finite clock value");
+
   const peer = ctx.peers.get(frame.from);
   if (!peer) return { ok: false, reason: "unknown_sender" };
 
