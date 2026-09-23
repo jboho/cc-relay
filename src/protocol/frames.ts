@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 // Exact base64url lengths: 32 bytes → 43 chars, 64 → 86, 24 → 32.
+// These schemas check the alphabet and length only, so callers must still decode with
+// fromB64u(value, bytes), which rejects non-canonical trailing bits, before using a value
+// as bytes or as a replay key.
 const b64u = (chars: number) => z.string().regex(new RegExp(`^[A-Za-z0-9_-]{${chars}}$`));
 const PeerId = b64u(43);
 const Ref = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);

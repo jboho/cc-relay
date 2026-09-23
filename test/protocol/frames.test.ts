@@ -33,6 +33,23 @@ describe("client frames", () => {
     const msg = { type: "msg", ref: "r", to: id, ciphertext: "a".repeat(120001), nonce: boxNonce };
     expect(parseClientFrame(JSON.stringify(msg))).toBeNull();
   });
+
+  test("rejects extra keys, non-integer ts, and an overlong ref", () => {
+    const helloExtra = { type: "hello", signPub: id, ts: 1, nonce: id, sig, extra: 1 };
+    expect(parseClientFrame(JSON.stringify(helloExtra))).toBeNull();
+    const helloFloatTs = { type: "hello", signPub: id, ts: 1.5, nonce: id, sig };
+    expect(parseClientFrame(JSON.stringify(helloFloatTs))).toBeNull();
+    const authOverlong = { type: "auth", sig: sig + "B" };
+    expect(parseClientFrame(JSON.stringify(authOverlong))).toBeNull();
+    const msgOverlongRef = {
+      type: "msg",
+      ref: "r".repeat(65),
+      to: id,
+      ciphertext: "abc",
+      nonce: boxNonce,
+    };
+    expect(parseClientFrame(JSON.stringify(msgOverlongRef))).toBeNull();
+  });
 });
 
 describe("hub frames", () => {
