@@ -95,4 +95,37 @@ describe("Router", () => {
     router.route(a.conn, msg(B, "later"));
     expect(b.sent).toHaveLength(RATE_LIMIT_PER_MIN + 1);
   });
+
+  test("the rate limit is per connection: one sender's budget doesn't throttle another, and a new connection starts fresh", () => {
+    const router = setup();
+    const a = fakeConn(A);
+    const b = fakeConn(B);
+    router.attach(a.conn);
+    router.attach(b.conn);
+    for (let i = 0; i < RATE_LIMIT_PER_MIN; i++) router.route(a.conn, msg(B, `a${i}`));
+    router.route(b.conn, msg(A, "b0"));
+    expect(a.sent.filter((f) => f.type === "msg")).toHaveLength(1);
+    expect(b.sent.at(-1)).toEqual({ type: "ack", ref: "b0" });
+
+    const a2 = fakeConn(A);
+    router.attach(a2.conn);
+    router.route(a2.conn, msg(B, "fresh"));
+    expect(a2.sent).toEqual([{ type: "ack", ref: "fresh" }]);
+  });
+
+  test("rejected sends don't count toward the window", () => {
+    let now = 0;
+    const router = setup(() => now);
+    const a = fakeConn(A);
+    const b = fakeConn(B);
+    router.attach(a.conn);
+    router.attach(b.conn);
+    for (let i = 0; i < RATE_LIMIT_PER_MIN; i++) router.route(a.conn, msg(B, `r${i}`));
+    now = 30_000;
+    for (let i = 0; i < RATE_LIMIT_PER_MIN; i++) router.route(a.conn, msg(B, `x${i}`));
+    expect(b.sent).toHaveLength(RATE_LIMIT_PER_MIN);
+    now = 60_000;
+    router.route(a.conn, msg(B, "later"));
+    expect(a.sent.at(-1)).toEqual({ type: "ack", ref: "later" });
+  });
 });
