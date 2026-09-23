@@ -103,6 +103,14 @@ describe("Handshake: gate", () => {
     expect(await new Handshake(d).onHello(hello(alice, { ts: NOW - HELLO_SKEW_MS - 1 }))).toBeNull();
     expect(await new Handshake(d).onHello(hello(alice, { ts: NOW + HELLO_SKEW_MS + 1 }))).toBeNull();
     expect(await new Handshake(d).onHello(hello(alice, { ts: NOW - HELLO_SKEW_MS }))).not.toBeNull();
+    expect(await new Handshake(d).onHello(hello(alice, { ts: NOW + HELLO_SKEW_MS }))).not.toBeNull();
+  });
+
+  test("a non-finite clock throws instead of silently disabling the skew and replay checks", async () => {
+    const guard = new ReplayGuard(HELLO_NONCE_TTL_MS);
+    const hs = new Handshake(deps({ now: () => NaN, helloNonces: guard }));
+    await expect(hs.onHello(hello(alice))).rejects.toThrow(RangeError);
+    expect(guard.size).toBe(0);
   });
 
   test("a reused hello nonce is rejected", async () => {
@@ -158,6 +166,17 @@ describe("Handshake: gate", () => {
     );
 
     expect(await new Handshake(d).onHello({ ...frame, nonce: variantNonce })).toBeNull();
+  });
+});
+
+describe("Handshake: wiring errors", () => {
+  test("the constructor throws when hubId is not a 32-byte sign public key", () => {
+    expect(() => new Handshake(deps({ hubId: new Uint8Array(31) }))).toThrow(RangeError);
+  });
+
+  test("onHello throws when randomBytes does not return 32 bytes", async () => {
+    const hs = new Handshake(deps({ randomBytes: () => new Uint8Array(31) }));
+    await expect(hs.onHello(hello(alice))).rejects.toThrow(RangeError);
   });
 });
 
@@ -218,6 +237,34 @@ describe("Handshake: tailscale mode", () => {
 
     release("alice@example.com");
     expect(await first).toBeNull();
+  });
+
+  test("a rejecting whois fails closed instead of crashing the caller", async () => {
+    const whois = { loginFor: () => Promise.reject(new Error("tailscale whois crashed")) };
+    const hs = new Handshake(deps({ mode: "tailscale", whois }));
+    await expect(hs.onHello(hello(alice))).resolves.toBeNull();
+    expect(hs.onAuth(answer(alice, toB64u(nacl.randomBytes(32))))).toBeNull();
+  });
+
+  test("whois runs only after the signature and skew checks pass", async () => {
+    const calls: unknown[] = [];
+    const whois = {
+      loginFor: async () => (calls.push(1), "alice@example.com"),
+    };
+    const d = deps({ mode: "tailscale", whois });
+
+    // Unknown key.
+    await new Handshake(d).onHello(hello(mallory));
+    expect(calls).toHaveLength(0);
+
+    // Allowlisted key, forged signature.
+    const forged = { ...hello(mallory), signPub: peerId(alice.signPub) };
+    await new Handshake(d).onHello(forged);
+    expect(calls).toHaveLength(0);
+
+    // Correctly signed, but stale ts.
+    await new Handshake(d).onHello(hello(alice, { ts: NOW - HELLO_SKEW_MS - 1 }));
+    expect(calls).toHaveLength(0);
   });
 });
 
