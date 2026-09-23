@@ -35,7 +35,22 @@ const RAW_404 = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 
 
 export async function startHub(opts: HubOptions): Promise<RunningHub> {
   validateBind(opts.mode, opts.host);
+  // Wiring bugs must fail loudly here, before any allocation or bind attempt.
+  // Handshake is only constructed per connection, so a bad hubId would
+  // otherwise surface as an uncaught throw on the first connection instead of
+  // at startup; a broken clock has the same problem. A missing whois in
+  // tailscale mode is worse: it wouldn't throw at all, it would just silently
+  // reject every hello, so it must be checked before pickPort/listen too.
+  if (opts.hubId.length !== nacl.sign.publicKeyLength) {
+    throw new RangeError("startHub: opts.hubId must be a 32-byte sign public key");
+  }
   const now = opts.now ?? Date.now;
+  if (!Number.isFinite(now())) {
+    throw new RangeError("startHub: opts.now() must return a finite clock value");
+  }
+  if (opts.mode === "tailscale" && !opts.whois) {
+    throw new Error("startHub: opts.whois is required in tailscale mode");
+  }
   const authTimeoutMs = opts.authTimeoutMs ?? 5000;
   const maxPending = opts.maxPending ?? 8;
   const pingIntervalMs = opts.pingIntervalMs ?? 30_000;
@@ -111,44 +126,71 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     });
 
     ws.on("message", async (data, isBinary) => {
-      // Any frame while a hello is still being checked is out of protocol.
-      if (busy || isBinary) return kill();
-      const frame = parseClientFrame(data.toString("utf8"));
-      if (!frame) return kill();
+      try {
+        // Any frame while a hello is still being checked is out of protocol.
+        if (busy || isBinary) return kill();
+        const frame = parseClientFrame(data.toString("utf8"));
+        if (!frame) return kill();
 
-      if (conn) {
-        if (frame.type !== "msg") return kill();
-        return router.route(conn, frame);
-      }
+        if (conn) {
+          if (frame.type !== "msg") return kill();
+          return router.route(conn, frame);
+        }
 
-      if (frame.type === "hello") {
-        busy = true;
-        const reply = await handshake.onHello(frame);
-        busy = false;
-        if (ws.readyState !== ws.OPEN) return;
-        if (!reply) return kill();
-        return ws.send(JSON.stringify(reply));
+        if (frame.type === "hello") {
+          busy = true;
+          const reply = await handshake.onHello(frame);
+          busy = false;
+          if (ws.readyState !== ws.OPEN) return;
+          if (!reply) return kill();
+          return ws.send(JSON.stringify(reply));
+        }
+        if (frame.type === "auth") {
+          const id = handshake.onAuth(frame);
+          if (!id) return kill();
+          clearTimeout(authTimer);
+          releasePending();
+          conn = {
+            id,
+            // "ack" means the frame was handed to the target's ws socket, not
+            // that it was end-to-end delivered: ws silently drops a send on a
+            // closing/closed socket, and a half-open TCP peer won't surface
+            // that until the next ping sweep catches it. The design's own
+            // `send` result for this is "sent", not "delivered".
+            send: (f) => ws.send(JSON.stringify(f)),
+            close: (code, reason) => ws.close(code, reason),
+          };
+          authed.set(ws, { alive: true });
+          router.attach(conn);
+          return ws.send(JSON.stringify({ type: "ready" }));
+        }
+        return kill();
+      } catch (err) {
+        // handshake.onHello/onAuth and router.route throw a RangeError only on
+        // a local wiring bug (e.g. a clock that turns non-finite after the
+        // startup validation above). That must not become a silent peer
+        // rejection or an unhandled rejection with the connection left
+        // half-open: fail closed toward the peer (kill, silent) and loud
+        // toward the operator (rethrow).
+        kill();
+        throw err;
       }
-      if (frame.type === "auth") {
-        const id = handshake.onAuth(frame);
-        if (!id) return kill();
-        clearTimeout(authTimer);
-        releasePending();
-        conn = {
-          id,
-          send: (f) => ws.send(JSON.stringify(f)),
-          close: (code, reason) => ws.close(code, reason),
-        };
-        authed.set(ws, { alive: true });
-        router.attach(conn);
-        return ws.send(JSON.stringify({ type: "ready" }));
-      }
-      return kill();
     });
   }
 
-  // Only authenticated connections are pinged; pre-auth ones are bounded by
-  // the auth timeout instead.
+  const port = opts.port ?? (await pickPort(opts.host));
+  await new Promise<void>((resolve, reject) => {
+    http.once("error", reject);
+    http.listen({ host: opts.host, port, exclusive: true }, () => {
+      http.off("error", reject);
+      resolve();
+    });
+  });
+
+  // Only started once listen has succeeded: starting it earlier would leak
+  // the interval on a failed listen (e.g. EADDRINUSE), since close() would
+  // then never be called to clear it. Only authenticated connections are
+  // pinged; pre-auth ones are bounded by the auth timeout instead.
   const pingTimer = setInterval(() => {
     for (const [ws, state] of authed) {
       if (!state.alive) {
@@ -159,15 +201,6 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
       ws.ping();
     }
   }, pingIntervalMs);
-
-  const port = opts.port ?? (await pickPort(opts.host));
-  await new Promise<void>((resolve, reject) => {
-    http.once("error", reject);
-    http.listen({ host: opts.host, port, exclusive: true }, () => {
-      http.off("error", reject);
-      resolve();
-    });
-  });
 
   return {
     port,

@@ -1,8 +1,11 @@
 import { request } from "node:http";
+import { createServer as createNetServer } from "node:net";
+import nacl from "tweetnacl";
 import { afterEach, describe, expect, test } from "vitest";
+import { toB64u } from "../../src/protocol/encoding.js";
 import { generateIdentity, peerId } from "../../src/protocol/identity.js";
 import { BindError } from "../../src/hub/bind.js";
-import { startHub } from "../../src/hub/server.js";
+import { MAX_PAYLOAD_BYTES, startHub } from "../../src/hub/server.js";
 import {
   authFrame,
   connectAuthed,
@@ -358,5 +361,98 @@ describe("hub: routing", () => {
       a.send(bad);
       expect(await a.closed).toBe(1006);
     }
+  });
+
+  test("the largest legal frame fits under maxPayload and still delivers", async () => {
+    const h = await hub();
+    const a = await authed(h, alice);
+    const b = await authed(h, bob);
+    const frame = {
+      type: "msg" as const,
+      ref: "r".repeat(64),
+      to: peerId(bob.signPub),
+      ciphertext: toB64u(nacl.randomBytes(90_000)), // 90000 * 4/3 = 120000 chars, the schema's max
+      nonce: toB64u(nacl.randomBytes(24)), // 24 * 4/3 = 32 chars, the schema's exact nonce length
+    };
+    expect(frame.ciphertext).toHaveLength(120_000);
+    expect(Buffer.byteLength(JSON.stringify(frame))).toBeLessThan(MAX_PAYLOAD_BYTES);
+    a.send(frame);
+    expect(await b.next()).toEqual({
+      type: "msg",
+      from: peerId(alice.signPub),
+      ciphertext: frame.ciphertext,
+      nonce: frame.nonce,
+    });
+    expect(await a.next()).toEqual({ type: "ack", ref: frame.ref });
+  });
+});
+
+describe("hub: startup validation", () => {
+  test("a wrong-length hubId is rejected before anything is allocated", async () => {
+    await expect(
+      startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: "p",
+        hubId: new Uint8Array(31),
+        allow: new Map(),
+      }),
+    ).rejects.toThrow(RangeError);
+  });
+
+  test("a non-finite clock is rejected before anything is allocated", async () => {
+    await expect(
+      startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: "p",
+        hubId: host.signPub,
+        allow: new Map(),
+        now: () => Number.NaN,
+      }),
+    ).rejects.toThrow(RangeError);
+  });
+
+  test("tailscale mode with no whois is rejected before pickPort/listen, even for a non-local address", async () => {
+    // 100.64.0.1 passes validateBind's tailscale-CGNAT check but is not an
+    // address this machine can bind, so if the whois check didn't run first,
+    // this would instead fail later with a PortError/bind error, not our
+    // startup-validation error.
+    await expect(
+      startHub({
+        mode: "tailscale",
+        host: "100.64.0.1",
+        path: "p",
+        hubId: host.signPub,
+        allow: new Map(),
+      }),
+    ).rejects.toThrow(/whois/i);
+  });
+
+  test("a failed listen doesn't leave the ping interval running", async () => {
+    const blocker = createNetServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen({ host: "127.0.0.1", port: 0 }, () => resolve());
+    });
+    const addr = blocker.address();
+    if (addr === null || typeof addr === "string") throw new Error("expected an AddressInfo");
+    const port = addr.port;
+
+    const before = process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    await expect(
+      startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: "p",
+        hubId: host.signPub,
+        allow: new Map(),
+        port,
+      }),
+    ).rejects.toThrow();
+    const after = process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    expect(after).toBe(before);
+
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
 });
