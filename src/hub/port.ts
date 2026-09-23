@@ -15,9 +15,14 @@ export function randomPort(): number {
 }
 
 export function isPortFree(host: string, port: number): Promise<boolean> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const probe = createServer();
-    probe.once("error", () => resolve(false));
+    // Only EADDRINUSE means "try another port"; any other bind error (e.g. EADDRNOTAVAIL
+    // for a host not on this machine) rejects instead, since rerolling can't fix it.
+    probe.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") resolve(false);
+      else reject(err);
+    });
     probe.listen({ host, port, exclusive: true }, () => probe.close(() => resolve(true)));
   });
 }
@@ -28,7 +33,13 @@ export async function pickPort(
 ): Promise<number> {
   for (let i = 0; i < attempts; i++) {
     const port = candidate();
-    if (await isPortFree(host, port)) return port;
+    let free: boolean;
+    try {
+      free = await isPortFree(host, port);
+    } catch (err) {
+      throw new PortError(`cannot bind ${host}:${port}`, { cause: err });
+    }
+    if (free) return port;
   }
   throw new PortError(`no free port on ${host} after ${attempts} attempts`);
 }

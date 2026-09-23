@@ -52,9 +52,33 @@ describe("ports", () => {
 
   test("pickPort gives up after the attempt limit", async () => {
     const taken = await occupy();
-    await expect(pickPort("127.0.0.1", { attempts: 3, candidate: () => taken })).rejects.toThrow(
-      PortError,
+    let calls = 0;
+    await expect(
+      pickPort("127.0.0.1", {
+        attempts: 3,
+        candidate: () => {
+          calls++;
+          return taken;
+        },
+      }),
+    ).rejects.toThrow(PortError);
+    expect(calls).toBe(3);
+  });
+
+  test("pickPort surfaces a host that is not on this machine instead of rerolling", async () => {
+    let calls = 0;
+    const candidate = () => {
+      calls++;
+      return 25000;
+    };
+    // 192.0.2.1 is TEST-NET-1 (RFC 5737): reserved for documentation, never assigned
+    // to a real machine, so binding it reliably fails with EADDRNOTAVAIL.
+    const err: unknown = await pickPort("192.0.2.1", { candidate }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PortError);
+    expect((err as PortError & { cause: NodeJS.ErrnoException }).cause.code).toBe(
+      "EADDRNOTAVAIL",
     );
+    expect(calls).toBe(1);
   });
 });
 
