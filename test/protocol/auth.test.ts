@@ -8,6 +8,7 @@ import {
   verifyChallenge,
   verifyHello,
 } from "../../src/protocol/auth.js";
+import { concatBytes, u64be, utf8 } from "../../src/protocol/encoding.js";
 import { generateIdentity } from "../../src/protocol/identity.js";
 
 const client = generateIdentity("alice");
@@ -36,6 +37,7 @@ describe("hello", () => {
     expect(verifyHello(client.signPub.slice(1), hub.signPub, ts, nonce, sig)).toBe(false);
     expect(verifyHello(client.signPub, hub.signPub, ts, nonce.slice(1), sig)).toBe(false);
     expect(verifyHello(client.signPub, hub.signPub, -1, nonce, sig)).toBe(false);
+    expect(verifyHello(client.signPub, hub.signPub.slice(1), ts, nonce, sig)).toBe(false);
   });
 });
 
@@ -54,9 +56,28 @@ describe("challenge", () => {
     expect(verifyChallenge(client.signPub, hub.signPub, nonce, helloSig)).toBe(false);
   });
 
+  test("returns false (does not throw) for malformed inputs", () => {
+    const challenge = nacl.randomBytes(32);
+    const sig = signChallenge(client, hub.signPub, challenge);
+    expect(verifyChallenge(client.signPub, hub.signPub, challenge, sig.slice(1))).toBe(false);
+    expect(verifyChallenge(client.signPub.slice(1), hub.signPub, challenge, sig)).toBe(false);
+    expect(verifyChallenge(client.signPub, hub.signPub, challenge.slice(1), sig)).toBe(false);
+    expect(verifyChallenge(client.signPub, hub.signPub.slice(1), challenge, sig)).toBe(false);
+  });
+
   test("messages are domain-separated and fixed-layout", () => {
     expect(helloMessage(hub.signPub, ts, nonce)).not.toEqual(challengeMessage(hub.signPub, nonce));
     expect(() => helloMessage(hub.signPub.slice(1), ts, nonce)).toThrow(RangeError);
     expect(() => challengeMessage(hub.signPub, nonce.slice(1))).toThrow(RangeError);
+
+    expect(helloMessage(hub.signPub, ts, nonce)).toEqual(
+      concatBytes(utf8("cc-relay/hello/v1\0"), hub.signPub, u64be(ts), nonce),
+    );
+    expect(helloMessage(hub.signPub, ts, nonce)).toHaveLength(90);
+
+    expect(challengeMessage(hub.signPub, nonce)).toEqual(
+      concatBytes(utf8("cc-relay/challenge/v1\0"), hub.signPub, nonce),
+    );
+    expect(challengeMessage(hub.signPub, nonce)).toHaveLength(86);
   });
 });

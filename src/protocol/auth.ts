@@ -47,7 +47,8 @@ function verify(message: () => Uint8Array, sig: Uint8Array, signPub: Uint8Array)
   try {
     return nacl.sign.detached.verify(message(), sig, signPub);
   } catch {
-    // Wrong-length inputs throw in tweetnacl; for a verifier that is just "invalid".
+    // message() runs inside the try, so a malformed peer input (RangeError from
+    // assertLength, EncodingError from u64be) is "invalid" too, same as tweetnacl's own length errors.
     return false;
   }
 }
