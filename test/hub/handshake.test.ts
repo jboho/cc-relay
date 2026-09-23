@@ -16,11 +16,17 @@ import {
 const NOW = 1_790_000_000_000;
 const host = generateIdentity("host");
 const alice = generateIdentity("alice");
+const bob = generateIdentity("bob");
 const mallory = generateIdentity("mallory");
 const allowed: AllowedPeer = {
   id: peerId(alice.signPub),
   signPub: alice.signPub,
   tailscaleLogin: "alice@example.com",
+};
+const allowedBob: AllowedPeer = {
+  id: peerId(bob.signPub),
+  signPub: bob.signPub,
+  tailscaleLogin: "bob@example.com",
 };
 
 function deps(overrides: Partial<HandshakeDeps> = {}): HandshakeDeps {
@@ -49,6 +55,24 @@ function hello(who: Identity, { ts = NOW, hubId = host.signPub } = {}): HelloFra
 
 function answer(who: Identity, challenge: string) {
   return { type: "auth" as const, sig: toB64u(signChallenge(who, host.signPub, fromB64u(challenge))) };
+}
+
+// Like hello(), but the nonce is fixed by the caller and the signer can differ
+// from the claimed identity, to build a hello whose signature will fail while
+// still exercising a particular nonce.
+function helloAs(
+  claim: Identity,
+  signer: Identity,
+  nonce: Uint8Array,
+  { ts = NOW }: { ts?: number } = {},
+): HelloFrame {
+  return {
+    type: "hello",
+    signPub: peerId(claim.signPub),
+    ts,
+    nonce: toB64u(nonce),
+    sig: toB64u(signHello(signer, host.signPub, ts, nonce)),
+  };
 }
 
 describe("Handshake: gate", () => {
@@ -94,6 +118,47 @@ describe("Handshake: gate", () => {
     expect(await hs.onHello(hello(alice))).toBeNull();
     expect(hs.onAuth(answer(alice, reply!.nonce))).toBeNull();
   });
+
+  test("a rejected hello does not burn its nonce", async () => {
+    const d = deps();
+    const nonce = nacl.randomBytes(32);
+    // Wrong signer for the claimed key.
+    expect(await new Handshake(d).onHello(helloAs(alice, mallory, nonce))).toBeNull();
+    // Right signer, but a stale ts.
+    expect(
+      await new Handshake(d).onHello(helloAs(alice, alice, nonce, { ts: NOW - HELLO_SKEW_MS - 1 })),
+    ).toBeNull();
+    // The nonce is still fresh: a fully valid hello with it succeeds.
+    expect(await new Handshake(d).onHello(helloAs(alice, alice, nonce))).not.toBeNull();
+  });
+
+  test("the replay key is per peer", async () => {
+    const d = deps({ allow: new Map([[allowed.id, allowed], [allowedBob.id, allowedBob]]) });
+    const nonce = nacl.randomBytes(32);
+    expect(await new Handshake(d).onHello(helloAs(alice, alice, nonce))).not.toBeNull();
+    // Same nonce bytes, different peer: not a replay.
+    expect(await new Handshake(d).onHello(helloAs(bob, bob, nonce))).not.toBeNull();
+  });
+
+  test("a non-canonical re-encoding of a used nonce is rejected", async () => {
+    const d = deps();
+    const frame = helloAs(alice, alice, nacl.randomBytes(32));
+    expect(await new Handshake(d).onHello(frame)).not.toBeNull();
+
+    // Flip the last base64url character's low bit: it lands on the two padding
+    // bits of a 32-byte (256-bit) encoding, so the decoded bytes are unchanged
+    // but the string is a different, non-canonical spelling of the same nonce.
+    const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const lastIndex = ALPHABET.indexOf(frame.nonce.at(-1)!);
+    const variantNonce = frame.nonce.slice(0, -1) + ALPHABET[lastIndex ^ 1];
+
+    expect(variantNonce).not.toBe(frame.nonce);
+    expect(new Uint8Array(Buffer.from(variantNonce, "base64url"))).toEqual(
+      new Uint8Array(Buffer.from(frame.nonce, "base64url")),
+    );
+
+    expect(await new Handshake(d).onHello({ ...frame, nonce: variantNonce })).toBeNull();
+  });
 });
 
 describe("Handshake: tailscale mode", () => {
@@ -126,6 +191,33 @@ describe("Handshake: tailscale mode", () => {
     };
     await new Handshake(deps({ mode: "tailscale", whois })).onHello(hello(alice));
     expect(calls).toEqual([["100.64.0.9", 40000]]);
+  });
+
+  test("a whois-rejected hello does not burn its nonce", async () => {
+    const guard = new ReplayGuard(HELLO_NONCE_TTL_MS);
+    const nonce = nacl.randomBytes(32);
+
+    const mismatched = new Handshake(
+      deps({ mode: "tailscale", helloNonces: guard, whois: whoisReturning("mallory@example.com") }),
+    );
+    expect(await mismatched.onHello(helloAs(alice, alice, nonce))).toBeNull();
+
+    const matched = new Handshake(
+      deps({ mode: "tailscale", helloNonces: guard, whois: whoisReturning("alice@example.com") }),
+    );
+    expect(await matched.onHello(helloAs(alice, alice, nonce))).not.toBeNull();
+  });
+
+  test("a second hello during an in-flight whois keeps the handshake failed", async () => {
+    let release!: (login: string | null) => void;
+    const whois = { loginFor: () => new Promise<string | null>((resolve) => (release = resolve)) };
+    const hs = new Handshake(deps({ mode: "tailscale", whois }));
+
+    const first = hs.onHello(hello(alice));
+    expect(await hs.onHello(hello(alice))).toBeNull();
+
+    release("alice@example.com");
+    expect(await first).toBeNull();
   });
 });
 
