@@ -57,7 +57,7 @@ describe("seal/open", () => {
     expect(open({ ...sealed, nonce: toB64u(new Uint8Array(8)) }, alice.boxPub, bob.boxSec)).toBeNull();
   });
 
-  test("throws on authenticated-but-malformed plaintext instead of returning null", () => {
+  test("returns null (does not throw) for authenticated but malformed plaintext", () => {
     // Encrypted honestly from alice to bob, but the plaintext inside is not a
     // valid Inner message. Decryption succeeds (it authenticates), so this
     // must still resolve to null via the schema/JSON checks, not throw.
