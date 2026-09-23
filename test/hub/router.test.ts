@@ -128,4 +128,39 @@ describe("Router", () => {
     router.route(a.conn, msg(B, "later"));
     expect(a.sent.at(-1)).toEqual({ type: "ack", ref: "later" });
   });
+
+  test.each([NaN, Infinity, -Infinity, undefined as unknown as number])(
+    "a non-finite clock (%s) throws instead of disabling the rate limit",
+    (bad) => {
+      const router = setup(() => bad);
+      const a = fakeConn(A);
+      const b = fakeConn(B);
+      router.attach(a.conn);
+      router.attach(b.conn);
+      expect(() => router.route(a.conn, msg(B))).toThrow(RangeError);
+      expect(a.sent).toEqual([]);
+      expect(b.sent).toEqual([]);
+    },
+  );
+
+  test("the rate check runs before the allowlist and online checks, so a flood of bad sends still spends the budget", () => {
+    const router = setup();
+    const a = fakeConn(A);
+    const b = fakeConn(B);
+    router.attach(a.conn);
+    router.attach(b.conn);
+    for (let i = 0; i < RATE_LIMIT_PER_MIN; i++) router.route(a.conn, msg(STRANGER, `s${i}`));
+    router.route(a.conn, msg(B, "late"));
+    expect(a.sent.at(-1)).toEqual({ type: "error", ref: "late", code: "rate_limited" });
+    expect(b.sent).toEqual([]);
+  });
+
+  test("attaching the same connection twice doesn't close it", () => {
+    const router = setup();
+    const a = fakeConn(A);
+    router.attach(a.conn);
+    router.attach(a.conn);
+    expect(a.closed).toEqual([]);
+    expect(router.isConnected(A)).toBe(true);
+  });
 });

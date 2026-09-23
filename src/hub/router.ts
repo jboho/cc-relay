@@ -47,15 +47,21 @@ export class Router {
     from.send({ type: "ack", ref: frame.ref });
   }
 
-  private allowSend(conn: Conn): boolean {
+  // Same reasoning as Handshake.clock() and acceptInbound: a NaN/Infinity
+  // clock makes `now - t < WINDOW_MS` false, pruning every entry and
+  // disabling the limit. A broken clock is a local wiring bug; throw.
+  private clock(): number {
     const now = this.now();
+    if (!Number.isFinite(now)) throw new RangeError("Router: now() must return a finite clock value");
+    return now;
+  }
+
+  private allowSend(conn: Conn): boolean {
+    const now = this.clock();
     const recent = (this.sendTimes.get(conn) ?? []).filter((t) => now - t < WINDOW_MS);
-    if (recent.length >= RATE_LIMIT_PER_MIN) {
-      this.sendTimes.set(conn, recent);
-      return false;
-    }
-    recent.push(now);
     this.sendTimes.set(conn, recent);
+    if (recent.length >= RATE_LIMIT_PER_MIN) return false;
+    recent.push(now);
     return true;
   }
 }
