@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "ask": ["mcp__cc-relay__send"]
+  }
+}

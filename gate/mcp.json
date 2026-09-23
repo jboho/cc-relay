@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cc-relay": {
+      "command": "node",
+      "args": ["gate/server.mjs"]
+    }
+  }
+}

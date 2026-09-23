@@ -1,0 +1,6 @@
+{
+  "permissions": {
+    "ask": ["mcp__cc-relay__send"],
+    "allow": ["mcp__cc-relay__send", "mcp__cc-relay"]
+  }
+}
