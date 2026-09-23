@@ -55,6 +55,15 @@ export function serializeIdentity(identity: Identity): string {
   });
 }
 
+function decodeField(field: string, value: string, length: number): Uint8Array {
+  try {
+    return fromB64u(value, length);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new IdentityError(`identity file has a malformed ${field}: ${detail}`, { cause: err });
+  }
+}
+
 export function parseIdentity(json: string): Identity {
   let raw: unknown;
   try {
@@ -64,22 +73,26 @@ export function parseIdentity(json: string): Identity {
   }
   const parsed = IdentityFile.safeParse(raw);
   if (!parsed.success) throw new IdentityError("identity file has the wrong shape");
-  let identity: Identity;
-  try {
-    identity = {
-      alias: parsed.data.alias,
-      signPub: fromB64u(parsed.data.signPub, nacl.sign.publicKeyLength),
-      signSec: fromB64u(parsed.data.signSec, nacl.sign.secretKeyLength),
-      boxPub: fromB64u(parsed.data.boxPub, nacl.box.publicKeyLength),
-      boxSec: fromB64u(parsed.data.boxSec, nacl.box.secretKeyLength),
-    };
-  } catch {
-    throw new IdentityError("identity file has a malformed key");
-  }
-  // A public key that doesn't match its secret key means a corrupted or hand-edited file.
-  const signFromSec = nacl.sign.keyPair.fromSecretKey(identity.signSec).publicKey;
+  const identity: Identity = {
+    alias: parsed.data.alias,
+    signPub: decodeField("signPub", parsed.data.signPub, nacl.sign.publicKeyLength),
+    signSec: decodeField("signSec", parsed.data.signSec, nacl.sign.secretKeyLength),
+    boxPub: decodeField("boxPub", parsed.data.boxPub, nacl.box.publicKeyLength),
+    boxSec: decodeField("boxSec", parsed.data.boxSec, nacl.box.secretKeyLength),
+  };
+  // tweetnacl's ed25519 secretKey is seed(32) || publicKey(32), and fromSecretKey
+  // just copies that second half out rather than deriving it — so a secretKey built
+  // from one party's seed paired with another party's real public key would pass
+  // unnoticed. Re-derive the whole keypair from the seed instead: the declared
+  // signPub must match the derived public key, and the stored signSec must match
+  // the derived secretKey (seed + the pubkey actually derived from it) bit-for-bit.
+  const signFromSeed = nacl.sign.keyPair.fromSeed(identity.signSec.subarray(0, 32));
   const boxFromSec = nacl.box.keyPair.fromSecretKey(identity.boxSec).publicKey;
-  if (!bytesEqual(signFromSec, identity.signPub) || !bytesEqual(boxFromSec, identity.boxPub)) {
+  if (
+    !bytesEqual(signFromSeed.secretKey, identity.signSec) ||
+    !bytesEqual(signFromSeed.publicKey, identity.signPub) ||
+    !bytesEqual(boxFromSec, identity.boxPub)
+  ) {
     throw new IdentityError("identity file keys do not match");
   }
   return identity;
