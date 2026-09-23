@@ -26,7 +26,7 @@ describe("cards", () => {
 
   test("rejects garbage, oversize input, and extra fields", () => {
     expect(() => decodeCard("not a card!")).toThrow(CardError);
-    expect(() => decodeCard("A".repeat(2049))).toThrow(CardError);
+    expect(() => decodeCard("A".repeat(2049))).toThrow(/too long/);
     const id = generateIdentity("alice");
     const body = { v: 1, alias: "alice", signPub: toB64u(id.signPub), boxPub: toB64u(id.boxPub) };
     expect(() => decodeCard(encodeRaw({ ...body, extra: true }))).toThrow(CardError);
@@ -47,6 +47,7 @@ describe("cards", () => {
     const bad = [
       { ...hub, lan: "evil.com/x?" },
       { ...hub, lan: "a@b" },
+      { ...hub, tailscale: "evil.com/x?" },
       { ...hub, path: "short" },
       { ...hub, path: "../" + "A".repeat(19) },
       { port: 1, path: hub.path },
@@ -60,6 +61,7 @@ describe("cards", () => {
   test("encodeCard refuses to produce an invalid card", () => {
     const id = generateIdentity("alice");
     expect(() => encodeCard({ ...cardFor(id), alias: "Bad Alias" })).toThrow(CardError);
+    expect(() => encodeCard({ ...cardFor(id), boxPub: new Uint8Array(16) })).toThrow(CardError);
   });
 });
 
@@ -72,5 +74,11 @@ describe("fingerprint", () => {
     expect(fingerprint(a.signPub, a.boxPub)).toBe(fp);
     expect(fingerprint(a.signPub, b.boxPub)).not.toBe(fp);
     expect(fingerprint(b.signPub, a.boxPub)).not.toBe(fp);
+  });
+
+  test("matches a known answer, pinning the domain prefix and format", () => {
+    expect(fingerprint(new Uint8Array(32).fill(1), new Uint8Array(32).fill(2))).toBe(
+      "a520-0594-de3a-4b71-2633",
+    );
   });
 });

@@ -32,8 +32,8 @@ const CardSchema = z
   .object({
     v: z.literal(1),
     alias: z.string().regex(ALIAS_RE),
-    signPub: z.string(),
-    boxPub: z.string(),
+    signPub: z.string().length(43),
+    boxPub: z.string().length(43),
     hub: HubEndpoint.optional(),
   })
   .strict();
@@ -71,8 +71,8 @@ export function decodeCard(text: string): Card {
   let raw: unknown;
   try {
     raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fromB64u(text.trim())));
-  } catch {
-    throw new CardError("card is not valid base64url JSON");
+  } catch (err) {
+    throw new CardError("card is not valid base64url JSON", { cause: err });
   }
   const parsed = CardSchema.safeParse(raw);
   if (!parsed.success) throw new CardError("card has the wrong shape");
@@ -83,8 +83,8 @@ export function decodeCard(text: string): Card {
       boxPub: fromB64u(parsed.data.boxPub, nacl.box.publicKeyLength),
       ...(parsed.data.hub ? { hub: parsed.data.hub } : {}),
     };
-  } catch {
-    throw new CardError("card has a malformed key");
+  } catch (err) {
+    throw new CardError("card has a malformed key", { cause: err });
   }
 }
 
