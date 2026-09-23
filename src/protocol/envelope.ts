@@ -1,0 +1,85 @@
+import nacl from "tweetnacl";
+import { z } from "zod";
+import { fromB64u, toB64u, utf8 } from "./encoding.js";
+
+export class EnvelopeError extends Error {
+  override name = "EnvelopeError";
+}
+
+export const MAX_TEXT_BYTES = 32 * 1024;
+// JSON escaping can inflate text up to 6x (control characters become \u00XX),
+// so the sealed plaintext gets its own cap. 64 KB of plaintext is about 87 KB
+// of base64url ciphertext, under the frame schema's 120,000-char limit.
+export const MAX_PLAINTEXT_BYTES = 64 * 1024;
+const ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+const PEER_ID_RE = /^[A-Za-z0-9_-]{43}$/;
+
+export const InnerSchema = z
+  .object({
+    v: z.literal(1),
+    id: z.string().regex(ID_RE),
+    ts: z.number().int().nonnegative(),
+    from: z.string().regex(PEER_ID_RE),
+    to: z.string().regex(PEER_ID_RE),
+    text: z.string().refine((t) => Buffer.byteLength(t, "utf8") <= MAX_TEXT_BYTES),
+  })
+  .strict();
+
+export type Inner = z.infer<typeof InnerSchema>;
+
+export interface Sealed {
+  ciphertext: string;
+  nonce: string;
+}
+
+export function newMessageId(): string {
+  return toB64u(nacl.randomBytes(16));
+}
+
+// The nonce is deliberately not a parameter. nacl.box is XSalsa20-Poly1305, and
+// reusing a nonce with the same key pair leaks plaintext and breaks
+// authentication, so every seal draws 24 fresh CSPRNG bytes. Never a counter.
+export function seal(inner: Inner, recipientBoxPub: Uint8Array, senderBoxSec: Uint8Array): Sealed {
+  const parsed = InnerSchema.safeParse(inner);
+  if (!parsed.success) throw new EnvelopeError("message is invalid");
+  const plaintext = utf8(JSON.stringify(parsed.data));
+  if (plaintext.length > MAX_PLAINTEXT_BYTES) throw new EnvelopeError("message is too large");
+  const nonce = nacl.randomBytes(nacl.box.nonceLength);
+  const ciphertext = nacl.box(
+    plaintext,
+    nonce,
+    recipientBoxPub,
+    senderBoxSec,
+  );
+  return { ciphertext: toB64u(ciphertext), nonce: toB64u(nonce) };
+}
+
+// Returns null for every failure (bad encoding, wrong key, tampering, bad JSON,
+// wrong shape). The caller only needs "accept or drop"; distinguishing them
+// here would give a sender an oracle.
+export function open(
+  sealed: Sealed,
+  senderBoxPub: Uint8Array,
+  recipientBoxSec: Uint8Array,
+): Inner | null {
+  let plaintext: Uint8Array | null;
+  try {
+    plaintext = nacl.box.open(
+      fromB64u(sealed.ciphertext),
+      fromB64u(sealed.nonce, nacl.box.nonceLength),
+      senderBoxPub,
+      recipientBoxSec,
+    );
+  } catch {
+    return null;
+  }
+  if (!plaintext) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(plaintext));
+  } catch {
+    return null;
+  }
+  const parsed = InnerSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
