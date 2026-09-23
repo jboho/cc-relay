@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { BindError, validateBind } from "../../src/hub/bind.js";
+import { BindError, type HubMode, validateBind } from "../../src/hub/bind.js";
 
 describe("validateBind", () => {
   test("accepts each mode's own range", () => {
@@ -9,6 +9,12 @@ describe("validateBind", () => {
     expect(() => validateBind("lan", "10.1.2.3")).not.toThrow();
     expect(() => validateBind("lan", "172.31.0.1")).not.toThrow();
     expect(() => validateBind("loopback", "127.0.0.1")).not.toThrow();
+    expect(() => validateBind("lan", "10.0.0.0")).not.toThrow();
+    expect(() => validateBind("lan", "10.255.255.255")).not.toThrow();
+    expect(() => validateBind("lan", "172.16.0.0")).not.toThrow();
+    expect(() => validateBind("lan", "172.31.255.255")).not.toThrow();
+    expect(() => validateBind("lan", "192.168.0.0")).not.toThrow();
+    expect(() => validateBind("lan", "192.168.255.255")).not.toThrow();
   });
 
   test("refuses wildcards and non-IPv4 hosts in every mode", () => {
@@ -27,5 +33,15 @@ describe("validateBind", () => {
     expect(() => validateBind("lan", "172.32.0.1")).toThrow(BindError);
     expect(() => validateBind("lan", "8.8.8.8")).toThrow(BindError);
     expect(() => validateBind("loopback", "127.0.0.2")).toThrow(BindError);
+    expect(() => validateBind("lan", "9.255.255.255")).toThrow(BindError);
+    expect(() => validateBind("lan", "11.0.0.0")).toThrow(BindError);
+    expect(() => validateBind("lan", "172.15.255.255")).toThrow(BindError);
+    expect(() => validateBind("lan", "172.32.0.0")).toThrow(BindError);
+    expect(() => validateBind("lan", "192.167.255.255")).toThrow(BindError);
+    expect(() => validateBind("lan", "192.169.0.0")).toThrow(BindError);
+  });
+
+  test("refuses an unknown hub mode", () => {
+    expect(() => validateBind("wan" as HubMode, "127.0.0.1")).toThrow(BindError);
   });
 });
