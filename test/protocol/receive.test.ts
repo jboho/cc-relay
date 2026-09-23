@@ -105,4 +105,42 @@ describe("acceptInbound", () => {
       reason: "replay",
     });
   });
+
+  test("rejected frames never reach the replay guard", () => {
+    const ctx = context();
+    const stranger = generateIdentity("stranger");
+
+    const unknownSender = frame(stranger, stranger, inner(stranger));
+    expect(acceptInbound(unknownSender, ctx)).toEqual({ ok: false, reason: "unknown_sender" });
+
+    const wrongKey = frame(bob, alice, inner(bob));
+    expect(acceptInbound(wrongKey, ctx)).toEqual({ ok: false, reason: "undecryptable" });
+
+    const validFrame = frame(alice, alice, inner(alice));
+    const corrupted = {
+      ...validFrame,
+      ciphertext: (validFrame.ciphertext[0] === "A" ? "B" : "A") + validFrame.ciphertext.slice(1),
+    };
+    expect(acceptInbound(corrupted, ctx)).toEqual({ ok: false, reason: "undecryptable" });
+
+    const senderMismatch = frame(alice, alice, inner(alice, { from: peerId(bob.signPub) }));
+    expect(acceptInbound(senderMismatch, ctx)).toEqual({ ok: false, reason: "sender_mismatch" });
+
+    const recipientMismatch = frame(alice, alice, inner(alice, { to: peerId(bob.signPub) }));
+    expect(acceptInbound(recipientMismatch, ctx)).toEqual({ ok: false, reason: "recipient_mismatch" });
+
+    const stale = frame(alice, alice, inner(alice, { ts: NOW - MAX_SKEW_MS - 1 }));
+    expect(acceptInbound(stale, ctx)).toEqual({ ok: false, reason: "stale" });
+
+    expect(ctx.replay.size).toBe(0);
+  });
+
+  test("replay IDs are scoped per sender", () => {
+    const ctx = context();
+    const id = newMessageId();
+    const aliceMsg = inner(alice, { id });
+    const bobMsg = inner(bob, { id });
+    expect(acceptInbound(frame(alice, alice, aliceMsg), ctx).ok).toBe(true);
+    expect(acceptInbound(frame(bob, bob, bobMsg), ctx).ok).toBe(true);
+  });
 });
