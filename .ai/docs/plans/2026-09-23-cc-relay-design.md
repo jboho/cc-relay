@@ -1,8 +1,8 @@
 # cc-relay: cross-machine Claude Code session messaging (plan for sign-off)
 
-**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done (177 tests), branch feat/m0-m2
+**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done · M3 done · M4 automated done (413 tests), manual runbook pending; branch feat/m3-m4
 
-> **Status:** DRAFT v3, approved. M0–M2 built on `feat/m0-m2`; M3–M4 not started.
+> **Status:** DRAFT v3, approved. M0–M2 on `main`; M3–M4 built on `feat/m3-m4`.
 > **Decided 2026-09-23:**
 > - **Transport:** one hub on your Mac, which can be reached in two ways: **Tailscale mode** (from anywhere) or **LAN mode** (same Wi-Fi, nothing extra to install).
 > - **Cloudflare (options A/B) dropped.** It would only matter if messaging had to work with your Mac off. See "Rejected alternatives".
