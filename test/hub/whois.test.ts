@@ -92,4 +92,27 @@ describe("tailscaleWhois", () => {
     expect(reasons[1]).toBe("whois 100.64.0.5:2 printed no login");
     expect(reasons[2]).toMatch(/not an IPv4 address/);
   });
+
+  test("still resolves null and throws nothing when onError itself throws", async () => {
+    const onError = () => {
+      throw new Error("onError boom");
+    };
+    await expect(
+      tailscaleWhois({ bin: fakeTailscale("exit 1"), onError }).loginFor("100.64.0.5", 1),
+    ).resolves.toBeNull();
+    await expect(
+      tailscaleWhois({ bin: fakeTailscale("echo '{}'"), onError }).loginFor("100.64.0.5", 2),
+    ).resolves.toBeNull();
+  });
+
+  test("still resolves null and throws nothing when execFile itself throws synchronously", async () => {
+    const onError = () => {
+      throw new Error("onError boom");
+    };
+    // A NUL byte in the binary path makes Node's execFile throw synchronously
+    // (ERR_INVALID_ARG_VALUE) before it ever reaches the callback.
+    await expect(
+      tailscaleWhois({ bin: "bad\0bin", onError }).loginFor("100.64.0.5", 1),
+    ).resolves.toBeNull();
+  });
 });
