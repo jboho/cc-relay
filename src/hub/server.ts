@@ -2,7 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Duplex } from "node:stream";
 import nacl from "tweetnacl";
 import { type WebSocket, WebSocketServer } from "ws";
+import { HUB_PATH_RE } from "../protocol/card.js";
 import { parseClientFrame } from "../protocol/frames.js";
+import { peerId } from "../protocol/identity.js";
 import { ReplayGuard } from "../protocol/replay.js";
 import { type HubMode, validateBind } from "./bind.js";
 import { type AllowedPeer, Handshake, HELLO_NONCE_TTL_MS } from "./handshake.js";
@@ -44,12 +46,42 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
   if (opts.hubId.length !== nacl.sign.publicKeyLength) {
     throw new RangeError("startHub: opts.hubId must be a 32-byte sign public key");
   }
+  if (!HUB_PATH_RE.test(opts.path)) {
+    throw new RangeError("startHub: opts.path must match HUB_PATH_RE");
+  }
+  if (opts.port !== undefined && (!Number.isInteger(opts.port) || opts.port < 1 || opts.port > 65535)) {
+    throw new RangeError("startHub: opts.port must be an integer in 1-65535");
+  }
   const now = opts.now ?? Date.now;
   if (!Number.isFinite(now())) {
     throw new RangeError("startHub: opts.now() must return a finite clock value");
   }
   if (opts.mode === "tailscale" && !opts.whois) {
-    throw new Error("startHub: opts.whois is required in tailscale mode");
+    throw new RangeError("startHub: opts.whois is required in tailscale mode");
+  }
+  // The allowlist is trusted config, but it's still hand-assembled by our own
+  // callers, and Handshake/Router each only look at part of it: Handshake
+  // looks a peer up by the map key and authenticates as peer.id; Router's
+  // allow set comes from the map's keys. A key/id mismatch lets one peer
+  // authenticate while its messages get stamped and delivered as someone
+  // else's identity. A malformed signPub, or (in tailscale mode) a missing
+  // tailscaleLogin, wouldn't throw at all — it would just silently reject
+  // that one peer on every connection attempt, forever. All of this is our
+  // own config, never peer-controlled, so it must fail loudly here rather
+  // than fail closed per-connection.
+  for (const [key, peer] of opts.allow) {
+    if (peer.signPub.length !== nacl.sign.publicKeyLength) {
+      throw new RangeError("startHub: opts.allow has a peer with a malformed signPub");
+    }
+    if (peer.id !== peerId(peer.signPub)) {
+      throw new RangeError("startHub: opts.allow has a peer whose id does not match its signPub");
+    }
+    if (key !== peer.id) {
+      throw new RangeError("startHub: opts.allow has a key that does not match its peer's id");
+    }
+    if (opts.mode === "tailscale" && !peer.tailscaleLogin) {
+      throw new RangeError("startHub: opts.allow has a peer missing tailscaleLogin in tailscale mode");
+    }
   }
   const authTimeoutMs = opts.authTimeoutMs ?? 5000;
   const maxPending = opts.maxPending ?? 8;
@@ -57,7 +89,11 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
   const expectedUrl = `/${opts.path}`;
 
   const helloNonces = new ReplayGuard(HELLO_NONCE_TTL_MS);
-  const router = new Router(new Set(opts.allow.keys()), now);
+  // Derived from the validated peer values, not the map's keys directly:
+  // the loop above already proved key === peer.id for every entry, but the
+  // router's notion of "who can receive" should trace back to the identity
+  // Handshake actually authenticates (peer.id), not an unchecked map key.
+  const router = new Router(new Set(Array.from(opts.allow.values(), (peer) => peer.id)), now);
   const authed = new Map<WebSocket, { alive: boolean }>();
   let pending = 0;
 
