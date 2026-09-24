@@ -290,6 +290,12 @@ describe("probe helpers", () => {
     expect(await probeHub(`ws://127.0.0.1:${port}/${"P".repeat(22)}`, self.signPub, self, 3000)).toBe("rejected");
   });
 
+  test("probeHub reports an unmapped socket error as unreachable, not rejected", async () => {
+    // Port 0 gives EADDRNOTAVAIL on macOS (cc-relay's platform); Linux may refuse instead.
+    const self = generateIdentity("x");
+    expect(await probeHub(`ws://127.0.0.1:0/${"P".repeat(22)}`, self.signPub, self, 1000)).toBe("unreachable");
+  });
+
   test("canConnect tells an open port from a closed one", async () => {
     const open: Server = createServer((s) => s.destroy());
     await new Promise<void>((r) => open.listen(0, "127.0.0.1", r));
