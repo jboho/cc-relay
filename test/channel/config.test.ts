@@ -229,6 +229,14 @@ describe("hub, link, and endpoint", () => {
     expect(loadLink(home)).toBeUndefined();
   });
 
+  test("a nonexistent home reads as absent, same as before the home was checked at all", () => {
+    const home = nextHome();
+    const self = generateIdentity("alice");
+    expect(loadHub(home)).toBeUndefined();
+    expect(loadLink(home)).toBeUndefined();
+    expect(codeOf(() => loadPeers(home, self))).toBe("missing");
+  });
+
   test("loading refuses a hub file that is a symlink, even to a private file outside the home", () => {
     const { home } = initHome();
     const outside = nextHome();

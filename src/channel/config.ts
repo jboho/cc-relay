@@ -90,12 +90,17 @@ export function writeJsonAtomic(path: string, value: unknown): void {
   }
 }
 
-// A missing file is "absent", not an error: checkPrivate's own "missing" code
-// for the file (not the home, which must already exist) is what tells the two
-// apart, so a loose home is still a permissions error even when the file itself
-// hasn't been written yet.
+// A missing home or a missing file both read as "absent" (no folder means no
+// file, same as before the home was checked at all), so callers like doctor
+// can probe a not-yet-initialised machine without hitting an error. A home or
+// file that exists but is loose, or is a symlink, still throws "permissions".
 function readJson(path: string, what: string): unknown | undefined {
-  checkPrivate(dirname(path), "cc-relay home");
+  try {
+    checkPrivate(dirname(path), "cc-relay home");
+  } catch (err) {
+    if (err instanceof ConfigError && err.code === "missing") return undefined;
+    throw err;
+  }
   try {
     checkPrivate(path, what);
   } catch (err) {
