@@ -3,6 +3,7 @@ import { fromB64u, toB64u } from "../../src/protocol/encoding.js";
 import {
   generateIdentity,
   IdentityError,
+  isReservedAlias,
   parseIdentity,
   peerId,
   serializeIdentity,
@@ -24,10 +25,21 @@ describe("identity", () => {
     }
   });
 
-  test("rejects reserved aliases, case-insensitively", () => {
-    for (const alias of ["user", "System", "ASSISTANT", "claude", "Anthropic", "human", "cc-relay"]) {
-      expect(() => generateIdentity(alias)).toThrow(IdentityError);
+  test("rejects reserved aliases", () => {
+    // Mixed case here would fail ALIAS_RE first ("invalid alias", not
+    // "reserved") since generateIdentity gates on it before ever reaching
+    // isReservedAlias -- these must all already be lowercase to exercise the
+    // reserved check at all.
+    for (const alias of ["user", "system", "assistant", "claude", "anthropic", "human", "cc-relay"]) {
+      expect(() => generateIdentity(alias)).toThrow(/reserved/);
     }
+  });
+
+  test("isReservedAlias itself is case-insensitive", () => {
+    expect(isReservedAlias("System")).toBe(true);
+    expect(isReservedAlias("ASSISTANT")).toBe(true);
+    expect(isReservedAlias("Anthropic")).toBe(true);
+    expect(isReservedAlias("alice")).toBe(false);
   });
 
   test("round-trips through serialize/parse", () => {

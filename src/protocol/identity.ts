@@ -17,6 +17,10 @@ export const ALIAS_RE = /^[a-z0-9_-]{1,32}$/;
 const RESERVED_ALIASES = new Set(["user", "system", "assistant", "claude", "anthropic", "human", "cc-relay"]);
 
 export function isReservedAlias(alias: string): boolean {
+  // Defense in depth: every caller today (ALIAS_RE, and CardSchema's own
+  // ALIAS_RE-backed alias field) already forces lowercase before this runs,
+  // so toLowerCase() has no reachable case to normalize yet -- kept so this
+  // function stays correct on its own if a future caller doesn't gate first.
   return RESERVED_ALIASES.has(alias.toLowerCase());
 }
 
