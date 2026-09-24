@@ -52,6 +52,27 @@ describe("resolveTailscale", () => {
     expect((err as Error).message).toContain(`${broken} (exit 1)`);
   });
 
+  test("a candidate killed by a signal (not our own timeout kill) reports `killed by <signal>`", async () => {
+    const killed = fakeBin("kill -TERM $$");
+    const err = await resolveTailscale({ candidates: [killed], timeoutMs: 5000 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TailscaleError);
+    expect((err as Error).message).toContain(`${killed} (killed by SIGTERM)`);
+  });
+
+  test("a candidate that exits non-zero reports `exit N` and the first line of its stderr", async () => {
+    const bin = fakeBin("echo 'first stderr line' 1>&2\necho 'second stderr line' 1>&2\nexit 7");
+    const err = await resolveTailscale({ candidates: [bin] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TailscaleError);
+    expect((err as Error).message).toContain(`${bin} (exit 7: first stderr line)`);
+  });
+
+  test("a candidate that hangs past the timeout reports `(timed out after`", async () => {
+    const hangs = fakeBin("sleep 5");
+    const err = await resolveTailscale({ candidates: [hangs], timeoutMs: 100 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TailscaleError);
+    expect((err as Error).message).toContain("(timed out after");
+  });
+
   test("the default candidates try PATH first, then the macOS install locations", () => {
     expect(TAILSCALE_CANDIDATES[0]).toBe("tailscale");
     expect(TAILSCALE_CANDIDATES).toContain("/Applications/Tailscale.app/Contents/MacOS/Tailscale");

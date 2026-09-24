@@ -21,11 +21,25 @@ export interface ResolvedTailscale {
 
 function tryVersion(bin: string, timeoutMs: number): Promise<{ version: string } | { reason: string }> {
   return new Promise((resolve) => {
-    execFile(bin, ["version"], { timeout: timeoutMs }, (err, stdout) => {
+    execFile(bin, ["version"], { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) {
-        if (err.killed) return resolve({ reason: `timed out after ${timeoutMs}ms` });
+        // err.killed is only true for a kill node itself issued (our timeout,
+        // or a maxBuffer overflow below); a signal sent by anything else
+        // (the process killing itself, an operator's `kill`) leaves it false
+        // with err.signal set, so check killed first to keep those apart.
+        if (err.killed || err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+          // A maxBuffer overflow kills the child too, but Node resolves it
+          // with its own error instead of setting err.killed/err.signal, so
+          // it never reaches the err.killed branch on its own; folded in here
+          // and reported as a timeout since both mean "this candidate hung".
+          return resolve({ reason: `timed out after ${timeoutMs}ms` });
+        }
+        if (err.signal) return resolve({ reason: `killed by ${err.signal}` });
+        if (typeof err.code === "number") {
+          const firstErrLine = String(stderr).split("\n")[0]?.trim() ?? "";
+          return resolve({ reason: firstErrLine ? `exit ${err.code}: ${firstErrLine}` : `exit ${err.code}` });
+        }
         if (typeof err.code === "string") return resolve({ reason: err.code });
-        if (typeof err.code === "number") return resolve({ reason: `exit ${err.code}` });
         return resolve({ reason: err.message.split("\n")[0] ?? err.message });
       }
       const first = String(stdout).split("\n")[0]?.trim() ?? "";
