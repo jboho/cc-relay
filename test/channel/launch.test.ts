@@ -1,6 +1,9 @@
 import { spawnSync } from "node:child_process";
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { checkLaunch, checkThisSession, findClaudeArgv, type ProcInfo, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
+import { tempHomes } from "./helpers.js";
 
 const GOOD = JSON.stringify({ permissions: { ask: [SEND_TOOL] } });
 const files: Record<string, string> = {
@@ -24,10 +27,13 @@ describe("checkLaunch", () => {
     });
   });
 
-  test("accepts --settings=<path> and inline JSON, and scans every --settings", () => {
+  test("accepts --settings=<path> and inline JSON, and the last --settings wins", () => {
     expect(checkLaunch(claude("--settings=/relay/settings.json"), read).ok).toBe(true);
     expect(checkLaunch(claude("--settings", GOOD), read).ok).toBe(true);
     expect(checkLaunch(claude("--settings", "/relay/other.json", "--settings", "/relay/settings.json"), read).ok).toBe(true);
+    const reversed = checkLaunch(claude("--settings", "/relay/settings.json", "--settings", "/relay/other.json"), read);
+    expect(reversed).toMatchObject({ ok: false });
+    expect((reversed as { reason: string }).reason).toContain("/relay/other.json");
   });
 
   test("an allow rule is not an ask rule", () => {
@@ -121,5 +127,20 @@ describe("the real process table", () => {
       ok: false,
       reason: "not running under a claude process",
     });
+  });
+});
+
+describe("checkThisSession, end to end", () => {
+  const nextHome = tempHomes("launch");
+
+  test("passes when the claude ancestor's --settings file has the ask rule", () => {
+    const home = nextHome();
+    mkdirSync(home, { recursive: true });
+    const settingsPath = join(home, "settings.json");
+    writeFileSync(settingsPath, GOOD);
+    chmodSync(settingsPath, 0o600);
+    const lookup = (pid: number): ProcInfo | null =>
+      pid === 50 ? { ppid: 1, args: `/opt/homebrew/bin/claude --settings ${settingsPath}` } : null;
+    expect(checkThisSession(50, lookup)).toEqual({ ok: true, settings: settingsPath });
   });
 });
