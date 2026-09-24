@@ -159,6 +159,38 @@ describe("hub command", () => {
     // Proves running.close() actually ran, not just that hub() returned.
     await expectPortClosed(port);
   });
+
+  test("registers the stop signal handler before printing the listening line", async () => {
+    const home = nextHome();
+    await init(fakeIo(home), { alias: "alice", host: true, mode: "loopback" });
+    const events: string[] = [];
+    const base = fakeIo(home);
+    const io: FakeIo = {
+      ...base,
+      out: (l) => {
+        events.push(`out:${l}`);
+        base.out(l);
+      },
+      until: () => {
+        events.push("until");
+        return base.until();
+      },
+    };
+    const done = hub(io);
+    cleanup.push(async () => {
+      io.stop();
+      await done;
+    });
+    await waitFor(() => events.some((e) => e.startsWith("out:")));
+    const untilIndex = events.indexOf("until");
+    const outIndex = events.findIndex((e) => e.startsWith("out:"));
+    // A caller watching stdout for "listening" must never be able to send a
+    // signal that arrives before the handler is registered: until() (which
+    // registers SIGINT/SIGTERM synchronously) must be called before out()
+    // prints that line, not just before hub() eventually awaits it.
+    expect(untilIndex).toBeGreaterThanOrEqual(0);
+    expect(untilIndex).toBeLessThan(outIndex);
+  });
 });
 
 describe("channel command", () => {

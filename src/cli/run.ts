@@ -84,9 +84,13 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
     }
     throw err;
   }
+  // Call until() (which registers the SIGINT/SIGTERM handlers synchronously)
+  // before printing the listening line: anyone watching stdout for that line
+  // must not be able to send a signal that arrives before the handler does.
+  const stopped = io.until();
   io.out(`cc-relay hub listening on ${host}:${running.port} (${config.mode} mode, ${peers.length} peer${peers.length === 1 ? "" : "s"})`);
   try {
-    await io.until();
+    await stopped;
   } finally {
     await running.close();
   }

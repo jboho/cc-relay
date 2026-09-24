@@ -198,21 +198,10 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
 
   test("stopping the hub with SIGTERM makes it exit 0 and announce it on stdout", async () => {
     const hubProc = await startHub(hostHome);
-    // Known race in src/cli/run.ts's hub(): it writes the "listening" line
-    // (io.out) before registering the SIGINT/SIGTERM handler (io.until()),
-    // and that write goes out over a pipe. A SIGTERM sent in the same instant
-    // this test observes "listening" can reach the process before the handler
-    // is installed, killing it via the OS's default disposition (code: null,
-    // signal: SIGTERM) instead of the graceful stop below -- reproduced
-    // outside this suite entirely (a bare spawn+kill loop against dist/cli.js,
-    // no vitest involved) at ~90% with a zero-delay kill, and even a minimal,
-    // unrelated script that only prints then registers once("SIGTERM", ...)
-    // shows the same failure mode at ~17%, so this isn't specific to this
-    // test's construction. The same probe never failed once in 30 runs at a
-    // 5ms delay; 20ms is used here for margin. This delay is a deliberate
-    // accommodation for that src/ race, not a fix for it -- flagged for the
-    // src/ owner rather than patched here.
-    await new Promise((r) => setTimeout(r, 20));
+    // src/cli/run.ts's hub() now calls io.until() (which registers the
+    // SIGINT/SIGTERM handler synchronously) before printing the "listening"
+    // line, so a SIGTERM sent the instant "listening" is observed can no
+    // longer race the handler -- no delay needed here.
     hubProc.kill("SIGTERM");
     const { code, stdout } = await hubProc.stopped;
     expect(code).toBe(0);
