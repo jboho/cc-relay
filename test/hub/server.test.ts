@@ -139,6 +139,10 @@ const alice = generateIdentity("alice");
 const bob = generateIdentity("bob");
 const mallory = generateIdentity("mallory");
 
+// A conforming path for tests that need one but aren't exercising path
+// validation itself (HUB_PATH_RE requires exactly 22 base64url characters).
+const VALID_PATH = "A".repeat(22);
+
 const hubs: TestHub[] = [];
 const probes: Probe[] = [];
 afterEach(async () => {
@@ -180,7 +184,7 @@ function httpGet(port: number, path: string) {
 
 describe("hub: bind", () => {
   test("refuses a wildcard or out-of-mode address", async () => {
-    const base = { path: "p", hubId: host.signPub, allow: new Map() };
+    const base = { path: VALID_PATH, hubId: host.signPub, allow: new Map() };
     await expect(startHub({ ...base, mode: "loopback", host: "0.0.0.0" })).rejects.toThrow(BindError);
     await expect(startHub({ ...base, mode: "lan", host: "127.0.0.1" })).rejects.toThrow(BindError);
   });
@@ -809,7 +813,7 @@ describe("hub: startup validation", () => {
       startHub({
         mode: "loopback",
         host: "127.0.0.1",
-        path: "p",
+        path: VALID_PATH,
         hubId: new Uint8Array(31),
         allow: new Map(),
       }),
@@ -821,7 +825,7 @@ describe("hub: startup validation", () => {
       startHub({
         mode: "loopback",
         host: "127.0.0.1",
-        path: "p",
+        path: VALID_PATH,
         hubId: host.signPub,
         allow: new Map(),
         now: () => Number.NaN,
@@ -838,11 +842,11 @@ describe("hub: startup validation", () => {
       startHub({
         mode: "tailscale",
         host: "100.64.0.1",
-        path: "p",
+        path: VALID_PATH,
         hubId: host.signPub,
         allow: new Map(),
       }),
-    ).rejects.toThrow(/whois/i);
+    ).rejects.toThrow(RangeError);
   });
 
   test("a failed listen doesn't leave the ping interval running", async () => {
@@ -861,7 +865,7 @@ describe("hub: startup validation", () => {
         startHub({
           mode: "loopback",
           host: "127.0.0.1",
-          path: "p",
+          path: VALID_PATH,
           hubId: host.signPub,
           allow: new Map(),
           port,
@@ -875,6 +879,132 @@ describe("hub: startup validation", () => {
     }
 
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
+  });
+
+  test("opts.path must match HUB_PATH_RE", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      await expect(
+        startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: "short",
+          hubId: host.signPub,
+          allow: new Map(),
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  test("an out-of-range opts.port is rejected before pickPort/listen", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      for (const badPort of [0, 65536, 1.5, -1]) {
+        await expect(
+          startHub({
+            mode: "loopback",
+            host: "127.0.0.1",
+            path: VALID_PATH,
+            hubId: host.signPub,
+            allow: new Map(),
+            port: badPort,
+          }),
+        ).rejects.toThrow(RangeError);
+      }
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  test("an allowlist key that doesn't match its peer's own id is rejected", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      // Self-consistent peer (id derives from signPub) stored under someone
+      // else's key: Handshake looks peers up by key but authenticates as
+      // peer.id, so a mismatch here is exactly the bug that let one peer's
+      // messages get stamped with another peer's identity.
+      const badAllow = new Map([
+        [peerId(bob.signPub), { id: peerId(alice.signPub), signPub: alice.signPub }],
+      ]);
+      await expect(
+        startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: VALID_PATH,
+          hubId: host.signPub,
+          allow: badAllow,
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  test("an allowlist id that isn't peerId(signPub) is rejected", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      const aliceId = peerId(alice.signPub);
+      // key === peer.id here, but peer.id was never derived from peer.signPub.
+      const badAllow = new Map([[aliceId, { id: aliceId, signPub: bob.signPub }]]);
+      await expect(
+        startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: VALID_PATH,
+          hubId: host.signPub,
+          allow: badAllow,
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  test("a 31-byte signPub in the allowlist is rejected", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      const shortKey = alice.signPub.slice(0, 31);
+      const badAllow = new Map([[peerId(alice.signPub), { id: peerId(alice.signPub), signPub: shortKey }]]);
+      await expect(
+        startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: VALID_PATH,
+          hubId: host.signPub,
+          allow: badAllow,
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
+  });
+
+  test("tailscale mode with an allowlist peer missing tailscaleLogin is rejected, even with whois provided", async () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      const aliceId = peerId(alice.signPub);
+      const badAllow = new Map([[aliceId, { id: aliceId, signPub: alice.signPub }]]);
+      await expect(
+        startHub({
+          mode: "tailscale",
+          host: "100.64.0.1",
+          path: VALID_PATH,
+          hubId: host.signPub,
+          allow: badAllow,
+          whois: { loginFor: async () => null },
+        }),
+      ).rejects.toThrow(RangeError);
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
   });
 });
 
