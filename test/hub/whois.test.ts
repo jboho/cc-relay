@@ -94,7 +94,11 @@ describe("tailscaleWhois", () => {
   });
 
   test("still resolves null and throws nothing when onError itself throws", async () => {
-    const onError = () => {
+    // Records before throwing: resolving null is trivial if onError was never
+    // called at all, so this also proves each path still calls it.
+    const reasons: string[] = [];
+    const onError = (reason: string) => {
+      reasons.push(reason);
       throw new Error("onError boom");
     };
     await expect(
@@ -103,6 +107,11 @@ describe("tailscaleWhois", () => {
     await expect(
       tailscaleWhois({ bin: fakeTailscale("echo '{}'"), onError }).loginFor("100.64.0.5", 2),
     ).resolves.toBeNull();
+    await expect(tailscaleWhois({ onError }).loginFor("::1", 1)).resolves.toBeNull();
+    expect(reasons).toHaveLength(3);
+    expect(reasons[0]).toMatch(/^whois 100\.64\.0\.5:1 failed: /);
+    expect(reasons[1]).toBe("whois 100.64.0.5:2 printed no login");
+    expect(reasons[2]).toMatch(/not an IPv4 address/);
   });
 
   test("still resolves null and throws nothing when execFile itself throws synchronously", async () => {
