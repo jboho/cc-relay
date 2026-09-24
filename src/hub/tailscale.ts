@@ -19,11 +19,17 @@ export interface ResolvedTailscale {
   version: string;
 }
 
-function tryVersion(bin: string, timeoutMs: number): Promise<string | null> {
+function tryVersion(bin: string, timeoutMs: number): Promise<{ version: string } | { reason: string }> {
   return new Promise((resolve) => {
     execFile(bin, ["version"], { timeout: timeoutMs }, (err, stdout) => {
+      if (err) {
+        if (err.killed) return resolve({ reason: `timed out after ${timeoutMs}ms` });
+        if (typeof err.code === "string") return resolve({ reason: err.code });
+        if (typeof err.code === "number") return resolve({ reason: `exit ${err.code}` });
+        return resolve({ reason: err.message.split("\n")[0] ?? err.message });
+      }
       const first = String(stdout).split("\n")[0]?.trim() ?? "";
-      resolve(err || first === "" ? null : first);
+      resolve(first === "" ? { reason: "no output" } : { version: first });
     });
   });
 }
@@ -34,9 +40,11 @@ export async function resolveTailscale({
   candidates = TAILSCALE_CANDIDATES,
   timeoutMs = 2000,
 }: { candidates?: readonly string[]; timeoutMs?: number } = {}): Promise<ResolvedTailscale> {
+  const tried: string[] = [];
   for (const bin of candidates) {
-    const version = await tryVersion(bin, timeoutMs);
-    if (version !== null) return { bin, version };
+    const result = await tryVersion(bin, timeoutMs);
+    if ("version" in result) return { bin, version: result.version };
+    tried.push(`${bin} (${result.reason})`);
   }
-  throw new TailscaleError(`tailscale CLI not found or not working; tried: ${candidates.join(", ")}`);
+  throw new TailscaleError(`tailscale CLI not found or not working; tried: ${tried.join(", ")}`);
 }

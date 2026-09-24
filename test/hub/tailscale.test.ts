@@ -48,8 +48,8 @@ describe("resolveTailscale", () => {
     const broken = fakeBin("exit 1");
     const err = await resolveTailscale({ candidates: ["/nonexistent/a", broken] }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TailscaleError);
-    expect((err as Error).message).toContain("/nonexistent/a");
-    expect((err as Error).message).toContain(broken);
+    expect((err as Error).message).toContain("/nonexistent/a (ENOENT)");
+    expect((err as Error).message).toContain(`${broken} (exit 1)`);
   });
 
   test("the default candidates try PATH first, then the macOS install locations", () => {
