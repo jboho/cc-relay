@@ -11,17 +11,28 @@ export interface ProcInfo {
   args: string;
 }
 
-export type ProcLookup = (pid: number) => ProcInfo | null;
+// A failure here (ps couldn't run, timed out, or its output didn't parse) says
+// nothing about whether the target is a claude process, so it's kept distinct
+// from "no info" — findClaudeArgv only reads "not a claude process" off the
+// end of a walk where every lookup actually succeeded.
+export type ProcResult = { ok: true; info: ProcInfo } | { ok: false; reason: string };
+
+export type ProcLookup = (pid: number) => ProcResult;
 
 export const psLookup: ProcLookup = (pid) => {
   let out: string;
   try {
     out = execFileSync("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
-  } catch {
-    return null;
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    // execFileSync sets .code to ETIMEDOUT (not a signal) when its own timeout
+    // option killed the child, distinct from the process legitimately failing.
+    if (e.code === "ETIMEDOUT") return { ok: false, reason: `ps timed out inspecting process ${pid}` };
+    return { ok: false, reason: `ps failed: ${e.message}` };
   }
   const m = /^\s*(\d+)\s+(.*)$/.exec(out.trimEnd());
-  return m ? { ppid: Number(m[1]), args: m[2] as string } : null;
+  if (!m) return { ok: false, reason: `ps produced output that didn't parse for process ${pid}` };
+  return { ok: true, info: { ppid: Number(m[1]), args: m[2] as string } };
 };
 
 function isClaude(tokens: readonly string[]): boolean {
@@ -36,16 +47,22 @@ function isClaude(tokens: readonly string[]): boolean {
 // token pair — e.g. `claude "use --settings /abs/relay.json"` — splits into
 // what looks like a real --settings flag. This parser can't tell that case
 // apart from a genuine one.
-export function findClaudeArgv(startPid: number, lookup: ProcLookup = psLookup, maxDepth = 8): string[] | null {
+// noAncestor is true only when the walk completed with every lookup succeeding
+// and simply found no claude ancestor; a lookup failure gets noAncestor: false
+// so callers (doctor's session check) can tell "nothing to check" from "we
+// couldn't tell", instead of both reading as the same generic message.
+export type ArgvResult = { ok: true; argv: string[] } | { ok: false; reason: string; noAncestor: boolean };
+
+export function findClaudeArgv(startPid: number, lookup: ProcLookup = psLookup, maxDepth = 8): ArgvResult {
   let pid = startPid;
   for (let depth = 0; depth < maxDepth && pid > 1; depth++) {
-    const info = lookup(pid);
-    if (!info) return null;
-    const tokens = info.args.split(/\s+/).filter((t) => t !== "");
-    if (isClaude(tokens)) return tokens;
-    pid = info.ppid;
+    const result = lookup(pid);
+    if (!result.ok) return { ok: false, reason: `could not inspect process ${pid}: ${result.reason}`, noAncestor: false };
+    const tokens = result.info.args.split(/\s+/).filter((t) => t !== "");
+    if (isClaude(tokens)) return { ok: true, argv: tokens };
+    pid = result.info.ppid;
   }
-  return null;
+  return { ok: false, reason: "not running under a claude process", noAncestor: true };
 }
 
 function flagValues(argv: readonly string[], flag: string): string[] {
@@ -131,6 +148,6 @@ export function checkLaunch(argv: readonly string[], read: (path: string) => str
 // Run once at channel start; a session can't change its own argv afterwards.
 export function checkThisSession(ppid: number = process.ppid, lookup: ProcLookup = psLookup): LaunchCheck {
   const argv = findClaudeArgv(ppid, lookup);
-  if (!argv) return { ok: false, reason: "not running under a claude process" };
-  return checkLaunch(argv);
+  if (!argv.ok) return { ok: false, reason: argv.reason };
+  return checkLaunch(argv.argv);
 }

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkLaunch, checkThisSession, findClaudeArgv, type ProcInfo, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
+import { checkLaunch, checkThisSession, findClaudeArgv, type ProcInfo, type ProcResult, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
 import { tempHomes } from "./helpers.js";
 
 const GOOD = JSON.stringify({ permissions: { ask: [SEND_TOOL] } });
@@ -76,16 +76,18 @@ describe("checkLaunch", () => {
 });
 
 describe("findClaudeArgv", () => {
-  const table = (rows: Record<number, ProcInfo>) => (pid: number) => rows[pid] ?? null;
+  const table = (rows: Record<number, ProcInfo>) => (pid: number): ProcResult =>
+    rows[pid] ? { ok: true, info: rows[pid] as ProcInfo } : { ok: false, reason: `no process ${pid}` };
 
   test("returns the parent's argv when the parent is claude", () => {
     const lookup = table({ 50: { ppid: 1, args: "/opt/homebrew/bin/claude --settings /r/s.json" } });
-    expect(findClaudeArgv(50, lookup)).toEqual(["/opt/homebrew/bin/claude", "--settings", "/r/s.json"]);
+    expect(findClaudeArgv(50, lookup)).toEqual({ ok: true, argv: ["/opt/homebrew/bin/claude", "--settings", "/r/s.json"] });
   });
 
   test("recognises an npm-installed claude run through node", () => {
     const lookup = table({ 50: { ppid: 1, args: "node /usr/local/bin/claude --settings /r/s.json" } });
-    expect(findClaudeArgv(50, lookup)?.[1]).toBe("/usr/local/bin/claude");
+    const result = findClaudeArgv(50, lookup);
+    expect(result.ok && result.argv[1]).toBe("/usr/local/bin/claude");
   });
 
   test("walks up through wrappers, but not forever", () => {
@@ -93,39 +95,53 @@ describe("findClaudeArgv", () => {
       50: { ppid: 40, args: "/bin/sh -c node cli.js channel" },
       40: { ppid: 30, args: "claude --settings /r/s.json" },
     });
-    expect(findClaudeArgv(50, lookup)?.[0]).toBe("claude");
+    const found = findClaudeArgv(50, lookup);
+    expect(found.ok && found.argv[0]).toBe("claude");
     const deep: Record<number, ProcInfo> = {};
     for (let pid = 100; pid > 2; pid--) deep[pid] = { ppid: pid - 1, args: "sh" };
     deep[2] = { ppid: 1, args: "claude --settings /r/s.json" };
-    expect(findClaudeArgv(100, table(deep))).toBeNull();
+    expect(findClaudeArgv(100, table(deep))).toEqual({ ok: false, reason: "not running under a claude process", noAncestor: true });
   });
 
   test("a name that merely contains claude doesn't count", () => {
     const lookup = table({ 50: { ppid: 1, args: "/usr/bin/claude-relay-fake --settings /r/s.json" } });
-    expect(findClaudeArgv(50, lookup)).toBeNull();
+    expect(findClaudeArgv(50, lookup)).toEqual({ ok: false, reason: "not running under a claude process", noAncestor: true });
   });
 
-  test("stops at a vanished process", () => {
-    expect(findClaudeArgv(50, () => null)).toBeNull();
+  test("a lookup failure is reported by pid and reason, not folded into 'not a claude process'", () => {
+    expect(findClaudeArgv(50, () => ({ ok: false, reason: "ps timed out" }))).toEqual({
+      ok: false,
+      reason: "could not inspect process 50: ps timed out",
+      noAncestor: false,
+    });
   });
 });
 
 describe("the real process table", () => {
   test("psLookup reads this test process's parent", () => {
-    const info = psLookup(process.pid);
-    expect(info?.ppid).toBe(process.ppid);
-    expect(info?.args).toContain("node");
+    const result = psLookup(process.pid);
+    expect(result.ok && result.info.ppid).toBe(process.ppid);
+    expect(result.ok && result.info.args).toContain("node");
   });
 
-  test("psLookup returns null for a pid that doesn't exist", () => {
+  test("psLookup reports why it failed for a pid that doesn't exist", () => {
     const dead = spawnSync(process.execPath, ["-e", ""]).pid as number;
-    expect(psLookup(dead)).toBeNull();
+    const result = psLookup(dead);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.reason).toMatch(/ps failed/);
   });
 
   test("outside claude, the session check is blocked", () => {
-    expect(checkThisSession(process.pid, () => ({ ppid: 1, args: "zsh" }))).toEqual({
+    expect(checkThisSession(process.pid, () => ({ ok: true, info: { ppid: 1, args: "zsh" } }))).toEqual({
       ok: false,
       reason: "not running under a claude process",
+    });
+  });
+
+  test("a lookup failure surfaces its own reason, distinct from 'not running under a claude process'", () => {
+    expect(checkThisSession(process.pid, () => ({ ok: false, reason: "ps timed out" }))).toEqual({
+      ok: false,
+      reason: `could not inspect process ${process.pid}: ps timed out`,
     });
   });
 });
@@ -139,8 +155,8 @@ describe("checkThisSession, end to end", () => {
     const settingsPath = join(home, "settings.json");
     writeFileSync(settingsPath, GOOD);
     chmodSync(settingsPath, 0o600);
-    const lookup = (pid: number): ProcInfo | null =>
-      pid === 50 ? { ppid: 1, args: `/opt/homebrew/bin/claude --settings ${settingsPath}` } : null;
+    const lookup = (pid: number): ProcResult =>
+      pid === 50 ? { ok: true, info: { ppid: 1, args: `/opt/homebrew/bin/claude --settings ${settingsPath}` } } : { ok: false, reason: `no process ${pid}` };
     expect(checkThisSession(50, lookup)).toEqual({ ok: true, settings: settingsPath });
   });
 });

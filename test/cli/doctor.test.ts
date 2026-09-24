@@ -38,12 +38,16 @@ function exchange(from: string, to: string): void {
 }
 
 const launchedWith = (settings: string | null): ProcLookup => (pid) =>
-  pid === 4242 ? { ppid: 1, args: settings ? `claude --settings ${settings}` : "claude" } : null;
+  pid === 4242
+    ? { ok: true, info: { ppid: 1, args: settings ? `claude --settings ${settings}` : "claude" } }
+    : { ok: false, reason: `no process ${pid}` };
 
-// Healthy defaults for everything outside the relay home.
+// Healthy defaults for everything outside the relay home. A lookup that
+// succeeds but never finds claude, so the session check SKIPs rather than
+// FAILs when a test doesn't care about it.
 const healthy = (extra: DoctorDeps = {}): DoctorDeps => ({
   ppid: 4242,
-  lookup: () => null,
+  lookup: () => ({ ok: true, info: { ppid: 1, args: "zsh" } }),
   clockOffset: async () => 0.08,
   fileExists: () => true,
   ...extra,
@@ -142,6 +146,14 @@ describe("doctor", () => {
       detail: expect.stringContaining("without --settings"),
     });
     expect((await byName(guestHome, healthy())).session?.status).toBe("SKIP");
+  });
+
+  test("a process-lookup failure fails the session check, distinct from being outside claude", async () => {
+    const { guestHome } = await pair({ startHub: false });
+    expect((await byName(guestHome, healthy({ lookup: () => ({ ok: false, reason: "ps timed out" }) }))).session).toMatchObject({
+      status: "FAIL",
+      detail: "could not inspect process 4242: ps timed out",
+    });
   });
 
   test("settings without the ask rule fail; without the bypass lock they warn", async () => {

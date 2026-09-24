@@ -63,7 +63,9 @@ function exchange(from: string, to: string): void {
 
 // A claude parent process launched with the relay settings, for checkThisSession.
 const launchedWith = (settings: string | null): ProcLookup => (pid) =>
-  pid === 4242 ? { ppid: 1, args: settings ? `claude --settings ${settings}` : "claude" } : null;
+  pid === 4242
+    ? { ok: true, info: { ppid: 1, args: settings ? `claude --settings ${settings}` : "claude" } }
+    : { ok: false, reason: `no process ${pid}` };
 
 async function pair() {
   const aliceHome = nextHome();
