@@ -14,6 +14,9 @@ import type { Io } from "./io.js";
 
 export interface HubDeps {
   interfaces?: Interfaces;
+  // Overridable so tailscale-mode hub() can be tested without a real
+  // tailscale binary; defaults to the real resolveTailscale.
+  resolveTailscale?: typeof resolveTailscale;
 }
 
 // Node's net/http listen() attaches address/port to the error it emits, but
@@ -51,7 +54,7 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
   });
   let whois: Whois | undefined;
   if (config.mode === "tailscale") {
-    const { bin } = await resolveTailscale();
+    const { bin } = await (deps.resolveTailscale ?? resolveTailscale)();
     whois = tailscaleWhois({ bin, onError: (why) => io.err(`cc-relay hub: ${why}`) });
   }
   let running: Awaited<ReturnType<typeof startHub>>;

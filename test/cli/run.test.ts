@@ -6,9 +6,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import { z } from "zod";
 import { add, card, init } from "../../src/cli/setup.js";
 import { channel, hub } from "../../src/cli/run.js";
-import { paths } from "../../src/channel/config.js";
+import { loadHub, paths, saveHub } from "../../src/channel/config.js";
 import type { ProcLookup } from "../../src/channel/launch.js";
 import { decodeCard, fingerprint } from "../../src/protocol/card.js";
+import { TailscaleError } from "../../src/hub/tailscale.js";
 import { tempHomes } from "../channel/helpers.js";
 import { type FakeIo, fakeIo } from "./helpers.js";
 
@@ -118,6 +119,33 @@ describe("hub command", () => {
     const home = nextHome();
     await init(fakeIo(home), { alias: "bob" });
     await expect(hub(fakeIo(home))).rejects.toMatchObject({ code: "missing" });
+  });
+
+  test("a tailscale-mode hub propagates a TailscaleError from resolveTailscale, not a stack trace", async () => {
+    const home = nextHome();
+    await init(fakeIo(home), { alias: "alice", host: true, mode: "loopback" });
+    const existing = loadHub(home);
+    if (!existing) throw new Error("expected init --host to have written a hub config");
+    // Rewritten to tailscale mode directly (not via init --host), since
+    // init resolves the real bind host at setup time and this machine has
+    // no real Tailscale interface to give it.
+    saveHub(home, { ...existing, mode: "tailscale", tailscaleLogin: "alice@example.com" });
+    const utunInterfaces = {
+      utun4: [
+        {
+          address: "100.101.102.103",
+          netmask: "255.192.0.0",
+          family: "IPv4" as const,
+          mac: "00:00:00:00:00:00",
+          internal: false,
+          cidr: null,
+        },
+      ],
+    };
+    const boom = new TailscaleError("tailscale CLI not found or not working; tried: none");
+    await expect(
+      hub(fakeIo(home), { interfaces: utunInterfaces, resolveTailscale: () => Promise.reject(boom) }),
+    ).rejects.toBe(boom);
   });
 
   test("listens on the configured loopback port, then stops cleanly", async () => {
