@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
 import { loadHub, loadIdentity, paths } from "../../src/channel/config.js";
 import { resolveTailscale, TailscaleError } from "../../src/hub/tailscale.js";
@@ -36,6 +36,18 @@ vi.mock("../../src/hub/tailscale.js", async (importOriginal) => {
 const nextHome = tempHomes("cli-main");
 
 describe("main", () => {
+  // Only one test below queues a mockRejectedValueOnce on resolveTailscale. If
+  // that test failed before main(["hub"]) consumed it, the queued rejection
+  // would otherwise leak into whichever test runs next and reject a call that
+  // expected the real passthrough behavior. mockReset() alone would also wipe
+  // out that passthrough (vi.fn(actual.resolveTailscale)'s own initial
+  // implementation), so it's restored right after.
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import("../../src/hub/tailscale.js")>("../../src/hub/tailscale.js");
+    vi.mocked(resolveTailscale).mockReset();
+    vi.mocked(resolveTailscale).mockImplementation(actual.resolveTailscale);
+  });
+
   test("help, --help and -h print usage on stdout and exit 0", async () => {
     for (const argv of [["help"], ["--help"], ["-h"]]) {
       const io = fakeIo(nextHome());
