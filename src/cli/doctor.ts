@@ -111,10 +111,12 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   checks.push(checkMcp(home, fileExists));
 
   const argv = findClaudeArgv(deps.ppid ?? process.ppid, deps.lookup);
-  if (!argv.ok && argv.noAncestor) {
-    add("SKIP", "session", "not run from a claude session; to check a relay session's launch flags, run `! cc-relay doctor` inside it");
-  } else if (!argv.ok) {
-    add("FAIL", "session", argv.reason);
+  if (!argv.ok) {
+    if (argv.kind === "no-ancestor") {
+      add("SKIP", "session", "not run from a claude session; to check a relay session's launch flags, run `! cc-relay doctor` inside it");
+    } else {
+      add("FAIL", "session", argv.reason);
+    }
   } else {
     const launch = checkLaunch(argv.argv);
     if (launch.ok) add("PASS", "session", `this session asks before every send (${launch.settings})`);

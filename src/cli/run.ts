@@ -120,7 +120,9 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
   // later, and must stay blocked for its whole lifetime rather than unblock
   // the moment the file looks right.
   const argv = findClaudeArgv(deps.ppid ?? process.ppid, deps.lookup);
-  const initial: LaunchCheck = argv.ok ? checkLaunch(argv.argv) : { ok: false, reason: argv.reason };
+  const initial: LaunchCheck = argv.ok
+    ? checkLaunch(argv.argv)
+    : { ok: false, reason: argv.kind === "no-ancestor" ? "not running under a claude process" : argv.reason };
   if (!initial.ok) io.err(`cc-relay: send is blocked: ${initial.reason}`);
   const launch = (): LaunchCheck => (initial.ok && argv.ok ? checkLaunch(argv.argv) : initial);
 

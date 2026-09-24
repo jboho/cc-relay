@@ -97,19 +97,19 @@ describe("findClaudeArgv", () => {
     const deep: Record<number, ProcInfo> = {};
     for (let pid = 100; pid > 2; pid--) deep[pid] = { ppid: pid - 1, args: "sh" };
     deep[2] = { ppid: 1, args: "claude --settings /r/s.json" };
-    expect(findClaudeArgv(100, table(deep))).toEqual({ ok: false, reason: "not running under a claude process", noAncestor: true });
+    expect(findClaudeArgv(100, table(deep))).toEqual({ ok: false, kind: "no-ancestor" });
   });
 
   test("a name that merely contains claude doesn't count", () => {
     const lookup = table({ 50: { ppid: 1, args: "/usr/bin/claude-relay-fake --settings /r/s.json" } });
-    expect(findClaudeArgv(50, lookup)).toEqual({ ok: false, reason: "not running under a claude process", noAncestor: true });
+    expect(findClaudeArgv(50, lookup)).toEqual({ ok: false, kind: "no-ancestor" });
   });
 
   test("a lookup failure is reported by pid and reason, not folded into 'not a claude process'", () => {
     expect(findClaudeArgv(50, () => ({ ok: false, reason: "ps timed out" }))).toEqual({
       ok: false,
+      kind: "lookup-failed",
       reason: "could not inspect process 50: ps timed out",
-      noAncestor: false,
     });
   });
 });

@@ -56,22 +56,22 @@ function isClaude(tokens: readonly string[]): boolean {
 // token pair — e.g. `claude "use --settings /abs/relay.json"` — splits into
 // what looks like a real --settings flag. This parser can't tell that case
 // apart from a genuine one.
-// noAncestor is true only when the walk completed with every lookup succeeding
-// and simply found no claude ancestor; a lookup failure gets noAncestor: false
-// so callers (doctor's session check) can tell "nothing to check" from "we
-// couldn't tell", instead of both reading as the same generic message.
-export type ArgvResult = { ok: true; argv: string[] } | { ok: false; reason: string; noAncestor: boolean };
+// "no-ancestor" means the walk completed with every lookup succeeding and
+// simply found no claude ancestor; a lookup failure is its own kind, carrying
+// the reason, so callers (doctor's session check) can tell "nothing to check"
+// from "we couldn't tell", instead of both reading as the same generic message.
+export type ArgvResult = { ok: true; argv: string[] } | { ok: false; kind: "no-ancestor" } | { ok: false; kind: "lookup-failed"; reason: string };
 
 export function findClaudeArgv(startPid: number, lookup: ProcLookup = psLookup, maxDepth = 8): ArgvResult {
   let pid = startPid;
   for (let depth = 0; depth < maxDepth && pid > 1; depth++) {
     const result = lookup(pid);
-    if (!result.ok) return { ok: false, reason: `could not inspect process ${pid}: ${result.reason}`, noAncestor: false };
+    if (!result.ok) return { ok: false, kind: "lookup-failed", reason: `could not inspect process ${pid}: ${result.reason}` };
     const tokens = result.info.args.split(/\s+/).filter((t) => t !== "");
     if (isClaude(tokens)) return { ok: true, argv: tokens };
     pid = result.info.ppid;
   }
-  return { ok: false, reason: "not running under a claude process", noAncestor: true };
+  return { ok: false, kind: "no-ancestor" };
 }
 
 function flagValues(argv: readonly string[], flag: string): string[] {
