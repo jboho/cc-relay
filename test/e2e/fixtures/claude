@@ -1,0 +1,12 @@
+// Stand-in for the claude CLI in the end-to-end test. It is named "claude" so
+// the channel's launch check recognises it (node + a script whose basename is
+// claude), and it starts the channel the way Claude Code does: from
+// --mcp-config, with stdio shared, so closing our stdin ends the channel.
+import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+
+const at = process.argv.indexOf("--mcp-config");
+const server = JSON.parse(readFileSync(process.argv[at + 1], "utf8")).mcpServers["cc-relay"];
+const child = spawn(server.command, server.args, { stdio: "inherit", env: { ...process.env, ...server.env } });
+process.stderr.write(`CHANNEL_PID ${child.pid}\n`);
+child.on("exit", (code) => process.exit(code ?? 1));
