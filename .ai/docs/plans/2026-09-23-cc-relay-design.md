@@ -1,6 +1,6 @@
 # cc-relay: cross-machine Claude Code session messaging (plan for sign-off)
 
-**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done · M3 done · M4 automated done (413 tests), manual runbook pending; branch feat/m3-m4
+**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done · M3 done · M4 automated done (489 tests), manual runbook pending; branch feat/m3-m4
 
 > **Status:** DRAFT v3, approved. M0–M2 on `main`; M3–M4 built on `feat/m3-m4`.
 > **Decided 2026-09-23:**
@@ -141,7 +141,7 @@ Severity reflects damage × how easily it can happen, *after* the planned mitiga
 | R10 | **(L) Metadata visible on the Wi-Fi.** Others on the network can see that your machines talk, when, and how much (content stays encrypted). | Low-Med | E2E encryption hides content. | Traffic pattern is visible. Tailscale mode hides this behind WireGuard. |
 | R11 | **(T) Tailscale as a third party.** Its coordination server sees node keys and which nodes connect. | Low | It "does not (and cannot) inspect your traffic". DERP relays only forward encrypted packets. *Option:* Tailnet Lock. | Metadata at Tailscale. |
 | R12 | **Flooding.** A peer or bug spams your session, burning context and tokens. | Medium | Inbound cap in the channel (10/min, 32 KB). | A slow drip still costs tokens. |
-| R13 | **Replay or tampering.** | Low | Authenticated encryption, timestamp window, seen-ID cache. A CSPRNG box nonce for every message. Decryption uses only the box key bound to the hub-authenticated sender. Single-use hub challenges. Tested. | None expected. |
+| R13 | **Replay or tampering.** | Low | Authenticated encryption, timestamp window, seen-ID cache. A CSPRNG box nonce for every message. Decryption uses only the box key bound to the hub-authenticated sender. Single-use hub challenges. Tested. | The seen-ID cache is in memory, so after a forced channel restart a message from the last 5–10 minutes can be replayed once. Fix: persist the cache (see the M3-M4 plan's As built section). |
 | R18 | **No forward secrecy.** Box keys are static, so anyone who records ciphertext (possible on the Wi-Fi in LAN mode, R10) can read it later if a box key leaks (R3/R5). | Low (informational) | Accepted for a two-person v1. Rotating keys limits how far back a leaked key reaches. *Later option:* ephemeral per-session key exchange. | Past captured traffic is exposed to a future key leak. |
 | R14 | **Tag spoofing** (`</channel>` in text), and **unreviewed code** (the `dangerously` flag). | Low-Med | Escaping + test. Standard crypto library, no homemade crypto, small surface. | New, unaudited code. |
 | R15 | **Supply chain.** A malicious npm dependency runs with your rights. | Medium | Four runtime dependencies (MCP SDK, tweetnacl, zod, ws), a pinned lockfile, `safe-pnpm` scan, no install scripts. | Trust in those four packages. |

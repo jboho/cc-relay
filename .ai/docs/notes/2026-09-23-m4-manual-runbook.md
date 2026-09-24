@@ -33,6 +33,7 @@ Pair them. Each `add` without `--confirm` prints the fingerprint; compare it wit
 ```bash
 CC_RELAY_HOME=$B cc-relay add "$(CC_RELAY_HOME=$A cc-relay card)"
 CC_RELAY_HOME=$B cc-relay add "$(CC_RELAY_HOME=$A cc-relay card 2>/dev/null)" --confirm <alice's fingerprint>
+CC_RELAY_HOME=$A cc-relay add "$(CC_RELAY_HOME=$B cc-relay card)"
 CC_RELAY_HOME=$A cc-relay add "$(CC_RELAY_HOME=$B cc-relay card 2>/dev/null)" --confirm <bob's fingerprint>
 CC_RELAY_HOME=$A cc-relay list
 CC_RELAY_HOME=$B cc-relay list
