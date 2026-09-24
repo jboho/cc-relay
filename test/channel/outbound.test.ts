@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { makePeer } from "../../src/channel/config.js";
-import { sealFor } from "../../src/channel/outbound.js";
-import { MAX_TEXT_BYTES, open } from "../../src/protocol/envelope.js";
+import { buildInner, sealFor } from "../../src/channel/outbound.js";
+import { MAX_PLAINTEXT_BYTES, MAX_TEXT_BYTES, open } from "../../src/protocol/envelope.js";
 import { generateIdentity, peerId } from "../../src/protocol/identity.js";
 
 const alice = generateIdentity("alice");
@@ -30,8 +30,14 @@ describe("sealFor", () => {
     expect(out).toEqual({ ok: false, error: `too large: ${MAX_TEXT_BYTES + 2} bytes (max ${MAX_TEXT_BYTES})` });
   });
 
-  test("text whose JSON escaping overflows the plaintext cap maps to too large", () => {
-    expect(sealFor(alice, bob, "\u0001".repeat(MAX_TEXT_BYTES), 1)).toEqual({ ok: false, error: "too large" });
+  test("text whose JSON escaping overflows the plaintext cap maps to too large, with the size and limit", () => {
+    const text = "\u0001".repeat(MAX_TEXT_BYTES);
+    const inner = buildInner(alice, bob, text, 1);
+    const plaintextBytes = Buffer.byteLength(JSON.stringify(inner), "utf8");
+    const out = sealFor(alice, bob, text, 1);
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error("expected a failure");
+    expect(out.error).toBe(`too large: ${plaintextBytes} bytes of plaintext (max ${MAX_PLAINTEXT_BYTES})`);
   });
 
   test("a wiring bug in our own keys still throws", () => {

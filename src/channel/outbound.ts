@@ -1,4 +1,4 @@
-import { EnvelopeError, type Inner, MAX_TEXT_BYTES, newMessageId, type Sealed, seal } from "../protocol/envelope.js";
+import { EnvelopeError, type Inner, MAX_PLAINTEXT_BYTES, MAX_TEXT_BYTES, newMessageId, type Sealed, seal } from "../protocol/envelope.js";
 import { type Identity, peerId } from "../protocol/identity.js";
 import type { Peer } from "../protocol/receive.js";
 
@@ -17,7 +17,13 @@ export function sealFor(self: Identity, to: Peer, text: string, now: number): Ou
   try {
     return { ok: true, sealed: seal(inner, to.boxPub, self.boxSec), id: inner.id };
   } catch (err) {
-    if (err instanceof EnvelopeError && err.code === "too_large") return { ok: false, error: "too large" };
+    if (err instanceof EnvelopeError && err.code === "too_large") {
+      // JSON escaping (control characters become \u00XX) can inflate text well
+      // past its own MAX_TEXT_BYTES check, so this reports the actual sealed
+      // plaintext size against seal()'s separate MAX_PLAINTEXT_BYTES cap.
+      const plaintextBytes = Buffer.byteLength(JSON.stringify(inner), "utf8");
+      return { ok: false, error: `too large: ${plaintextBytes} bytes of plaintext (max ${MAX_PLAINTEXT_BYTES})` };
+    }
     throw err;
   }
 }
