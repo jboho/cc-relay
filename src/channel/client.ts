@@ -18,10 +18,16 @@ export function authFor(self: Identity, hubId: Uint8Array, challenge: string): A
   return { type: "auth", sig: toB64u(signChallenge(self, hubId, fromB64u(challenge, 32))) };
 }
 
+// 2 ** attempt overflows to Infinity past attempt 1023, and min * Infinity is
+// NaN when min is 0 - capping the exponent keeps the multiply finite regardless
+// of how many attempts have accumulated.
+const MAX_BACKOFF_EXPONENT = 30;
+
 // Doubles per failed attempt up to max. Jitter in the upper half keeps two
 // relays that lost the hub at the same moment from reconnecting in lockstep.
 export function backoffDelay(attempt: number, min: number, max: number, random: number): number {
-  const base = Math.min(max, min * 2 ** attempt);
+  const exponent = Math.min(Math.max(attempt, 0), MAX_BACKOFF_EXPONENT);
+  const base = Math.min(max, min * 2 ** exponent);
   return base / 2 + random * (base / 2);
 }
 
@@ -61,6 +67,7 @@ export class HubClient {
   private reconnectTimer: NodeJS.Timeout | undefined;
   private keepaliveTimer: NodeJS.Timeout | undefined;
   private stopped = false;
+  private started = false;
   private readonly now: () => number;
 
   constructor(private readonly opts: HubClientOptions) {
@@ -72,6 +79,8 @@ export class HubClient {
   }
 
   start(): void {
+    if (this.started) return;
+    this.started = true;
     this.connect();
   }
 
@@ -99,7 +108,7 @@ export class HubClient {
     });
   }
 
-  private failPending(error: "hub disconnected"): void {
+  private failPending(error: "hub disconnected" | "superseded"): void {
     for (const [ref, p] of this.pending) {
       clearTimeout(p.timer);
       p.resolve({ ok: false, error });
@@ -129,55 +138,86 @@ export class HubClient {
       ws.terminate();
     };
 
+    // A socket this connect() replaced (e.g. after a second start() call, before
+    // the started guard existed, or any future path that outlives its ws) must
+    // not go on mutating state for a session that has already moved to a newer
+    // socket.
     ws.on("open", () => {
+      if (this.ws !== ws) return;
+      // Doubles as the handshake timer: a hub that pings without ever
+      // finishing the handshake must not keep re-arming this below.
       this.armKeepalive(ws);
       ws.send(JSON.stringify(helloFor(this.opts.identity, this.opts.hubId, this.now())));
     });
-    ws.on("ping", () => this.armKeepalive(ws));
-    ws.on("error", (err) => this.opts.log(`cc-relay: hub connection error: ${err.message}`));
+    ws.on("ping", () => {
+      if (this.ws !== ws) return;
+      if (phase === "ready") this.armKeepalive(ws);
+    });
+    ws.on("error", (err) => {
+      if (this.ws !== ws) return;
+      this.opts.log(`cc-relay: hub connection error: ${err.message}`);
+    });
     ws.on("message", (data, isBinary) => {
-      if (isBinary) return bail("binary frame from hub");
-      const frame: HubFrame | null = parseHubFrame(data.toString("utf8"));
-      if (!frame) return bail("malformed frame from hub");
-      if (phase === "hello") {
-        if (frame.type !== "challenge") return bail(`expected challenge, got ${frame.type}`);
-        phase = "auth";
-        return ws.send(JSON.stringify(authFor(this.opts.identity, this.opts.hubId, frame.nonce)));
-      }
-      if (phase === "auth") {
-        if (frame.type !== "ready") return bail(`expected ready, got ${frame.type}`);
-        phase = "ready";
-        this.attempt = 0;
-        this.stateValue = "ready";
-        this.opts.log("cc-relay: connected to hub");
-        return;
-      }
-      switch (frame.type) {
-        case "msg":
-          return this.opts.onMessage({ from: frame.from, ciphertext: frame.ciphertext, nonce: frame.nonce });
-        case "ack":
-        case "error": {
-          const p = this.pending.get(frame.ref);
-          if (!p) return;
-          this.pending.delete(frame.ref);
-          clearTimeout(p.timer);
-          return p.resolve(frame.type === "ack" ? { ok: true } : { ok: false, error: frame.code });
+      if (this.ws !== ws) return;
+      try {
+        if (isBinary) return bail("binary frame from hub");
+        const frame: HubFrame | null = parseHubFrame(data.toString("utf8"));
+        if (!frame) return bail("malformed frame from hub");
+        if (phase === "hello") {
+          if (frame.type !== "challenge") return bail(`expected challenge, got ${frame.type}`);
+          phase = "auth";
+          return ws.send(JSON.stringify(authFor(this.opts.identity, this.opts.hubId, frame.nonce)));
         }
-        default:
-          return bail(`unexpected ${frame.type} after ready`);
+        if (phase === "auth") {
+          if (frame.type !== "ready") return bail(`expected ready, got ${frame.type}`);
+          phase = "ready";
+          this.attempt = 0;
+          this.stateValue = "ready";
+          this.opts.log("cc-relay: connected to hub");
+          return;
+        }
+        switch (frame.type) {
+          case "msg":
+            return this.opts.onMessage({ from: frame.from, ciphertext: frame.ciphertext, nonce: frame.nonce });
+          case "ack":
+          case "error": {
+            const p = this.pending.get(frame.ref);
+            if (!p) return;
+            this.pending.delete(frame.ref);
+            clearTimeout(p.timer);
+            return p.resolve(frame.type === "ack" ? { ok: true } : { ok: false, error: frame.code });
+          }
+          default:
+            return bail(`unexpected ${frame.type} after ready`);
+        }
+      } catch (err) {
+        // onMessage and log are caller-supplied and can throw arbitrary app code;
+        // an uncaught throw here kills the whole channel process, so it's caught
+        // and logged by name only - never the raw frame, which may carry ciphertext.
+        const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+        try {
+          this.opts.log(`cc-relay: onMessage threw while handling a frame from the hub: ${detail}`);
+        } catch {
+          // log is untrusted too; swallow rather than risk a second throw.
+        }
       }
     });
     ws.on("close", (code) => {
+      if (this.ws !== ws) return;
       clearTimeout(this.keepaliveTimer);
-      this.failPending("hub disconnected");
-      if (this.stopped) return;
+      if (this.stopped) {
+        this.failPending("hub disconnected");
+        return;
+      }
       // Another session with the same identity took over. Reconnecting would
       // just knock that one off in turn, forever.
       if (code === SUPERSEDED_CODE) {
+        this.failPending("superseded");
         this.stateValue = "superseded";
         this.opts.log("cc-relay: another session with this identity connected; this one stops sending");
         return;
       }
+      this.failPending("hub disconnected");
       this.stateValue = "connecting";
       this.scheduleReconnect();
     });

@@ -5,6 +5,7 @@ import { backoffDelay, HubClient, type HubClientOptions } from "../../src/channe
 import { toB64u } from "../../src/protocol/encoding.js";
 import { generateIdentity, type Identity, peerId } from "../../src/protocol/identity.js";
 import type { InboundFrame } from "../../src/protocol/receive.js";
+import { SUPERSEDED_CODE } from "../../src/hub/router.js";
 import { startTestHub, type TestHub } from "../hub/helpers.js";
 
 const host = generateIdentity("host");
@@ -90,6 +91,16 @@ describe("backoffDelay", () => {
     expect([0, 1, 2, 3].map((n) => backoffDelay(n, 500, 30_000, 1))).toEqual([500, 1000, 2000, 4000]);
     expect(backoffDelay(20, 500, 30_000, 1)).toBe(30_000);
     expect(backoffDelay(0, 500, 30_000, 0)).toBe(250);
+  });
+
+  test("caps the exponent so a very high attempt count doesn't overflow to NaN", () => {
+    expect(backoffDelay(2000, 500, 30_000, 1)).toBe(30_000);
+    expect(Number.isFinite(backoffDelay(2000, 500, 30_000, 1))).toBe(true);
+  });
+
+  test("clamps to a finite delay when min is 0, even after many attempts", () => {
+    expect(backoffDelay(2000, 0, 30_000, 1)).toBe(0);
+    expect(Number.isFinite(backoffDelay(2000, 0, 30_000, 0.5))).toBe(true);
   });
 });
 
@@ -177,6 +188,18 @@ describe("HubClient against a misbehaving hub", () => {
     expect(a.logs.some((l) => l.includes("dropping the hub connection"))).toBe(true);
   });
 
+  test("a ping before the handshake completes doesn't reset the keepalive, so a stalled handshake still times out", async () => {
+    const fake = await fakeHub({
+      onHello: (ws) => {
+        const t = setInterval(() => ws.ping(), 20);
+        ws.on("close", () => clearInterval(t));
+      },
+    });
+    const a = client(fake.url, alice, { keepaliveMs: 100 });
+    await waitFor(() => a.logs.includes("cc-relay: no ping from the hub; reconnecting"));
+    expect(a.c.state).not.toBe("ready");
+  });
+
   test("a hub that stops pinging is dropped", async () => {
     const fake = await fakeHub();
     const a = client(fake.url, alice, { keepaliveMs: 100 });
@@ -207,6 +230,28 @@ describe("HubClient against a misbehaving hub", () => {
     expect(delays.every((d) => d === 20)).toBe(true);
   });
 
+  test("a send pending when the session is superseded is rejected as superseded, not hub disconnected", async () => {
+    let serverWs: WebSocket | undefined;
+    const fake = await fakeHub({ afterReady: (ws) => { serverWs = ws; } });
+    const a = client(fake.url, alice);
+    await waitFor(() => a.c.state === "ready");
+    const pending = a.c.send(peerId(bob.signPub), SEALED);
+    await waitFor(() => serverWs !== undefined);
+    serverWs?.close(SUPERSEDED_CODE);
+    expect(await pending).toEqual({ ok: false, error: "superseded" });
+    expect(a.c.state).toBe("superseded");
+  });
+
+  test("a second start() call is a no-op, not a second live connection", async () => {
+    const fake = await fakeHub();
+    const a = client(fake.url, alice);
+    a.c.start();
+    a.c.start();
+    await waitFor(() => a.c.state === "ready");
+    await new Promise((r) => setTimeout(r, 150));
+    expect(fake.connections()).toBe(1);
+  });
+
   test("stop() ends the loop for good", async () => {
     const fake = await fakeHub();
     const a = client(fake.url, alice);
@@ -216,5 +261,39 @@ describe("HubClient against a misbehaving hub", () => {
     await new Promise((r) => setTimeout(r, 200));
     expect(fake.connections()).toBe(seen);
     expect(a.c.state).toBe("closed");
+  });
+});
+
+describe("HubClient with a throwing app callback", () => {
+  test("onMessage throwing is caught and logged, without the raw message text, instead of killing the channel", async () => {
+    const fake = await fakeHub({
+      onReady: (ws) => ws.send(JSON.stringify({ type: "msg", from: peerId(bob.signPub), ...SEALED })),
+    });
+    const logs: string[] = [];
+    let uncaught: unknown;
+    const onUncaught = (err: unknown) => {
+      uncaught = err;
+    };
+    process.on("uncaughtException", onUncaught);
+    const c = new HubClient({
+      url: fake.url,
+      hubId: host.signPub,
+      identity: alice,
+      onMessage: () => {
+        throw new Error("boom from onMessage");
+      },
+      log: (l) => logs.push(l),
+      backoffMinMs: 20,
+      backoffMaxMs: 100,
+    });
+    c.start();
+    cleanup.push(() => c.stop());
+    try {
+      await waitFor(() => logs.some((l) => l.includes("boom from onMessage")));
+      expect(uncaught).toBeUndefined();
+      expect(logs.some((l) => l.includes(SEALED.ciphertext))).toBe(false);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+    }
   });
 });
