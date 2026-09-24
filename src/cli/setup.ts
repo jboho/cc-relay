@@ -95,8 +95,15 @@ export async function init(io: Io, opts: InitOptions): Promise<number> {
   const hub = opts.host ? validateHub(await hubConfigFor(opts)) : undefined;
   const identity = generateIdentity(opts.alias);
   // Only write peers.json if it isn't already there, so a retry never wipes
-  // peers a partially-completed earlier run had already stored.
-  if (!existsSync(p.peers)) savePeers(home, identity, []);
+  // peers a partially-completed earlier run had already stored. A kept file
+  // still has to fit the new identity though (e.g. its own alias can't match
+  // a peer already on the list, left over from an earlier attempt under a
+  // different alias) -- loadPeers runs the same checkPeers validation
+  // savePeers would, so a bad fit is refused here with the same clear message
+  // loadPeers already gives, instead of a separate validatePeers call that
+  // would just duplicate it.
+  if (existsSync(p.peers)) loadPeers(home, identity);
+  else savePeers(home, identity, []);
   writeJsonAtomic(p.settings, relaySettings());
   writeJsonAtomic(p.mcp, mcpConfig(io, home));
   // A retry without --host clears any hub.json left by an earlier failed
@@ -153,6 +160,9 @@ export function add(io: Io, opts: AddOptions): number {
   const hub = loadHub(home);
   if (hub?.mode === "tailscale" && opts.tailscaleLogin === undefined) {
     throw new UsageError("this hub runs in tailscale mode: pass --tailscale-login <the peer's Tailscale login>");
+  }
+  if (hub?.mode !== "tailscale" && opts.tailscaleLogin !== undefined) {
+    throw new UsageError("--tailscale-login only applies when this machine's own hub runs in tailscale mode");
   }
   const peer = makePeer({
     alias: peerCard.alias,

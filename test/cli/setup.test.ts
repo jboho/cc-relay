@@ -101,6 +101,16 @@ describe("init", () => {
     expect(loadPeers(home, loadIdentity(home)).map((p) => p.alias)).toEqual(["bob"]);
   });
 
+  test("a leftover peers.json whose peer alias collides with the new identity's alias is refused, and nothing is written", async () => {
+    const home = nextHome();
+    const p = paths(home);
+    ensureHome(home);
+    const bob = generateIdentity("bob");
+    savePeers(home, generateIdentity("placeholder"), [makePeer({ ...bob, alias: "alice" })]);
+    await expect(init(fakeIo(home), { alias: "alice" })).rejects.toBeInstanceOf(ConfigError);
+    for (const f of [p.identity, p.settings, p.mcp, p.hub]) expect(existsSync(f)).toBe(false);
+  });
+
   test("a leftover hub.json from an earlier failed --host attempt is removed by a plain init", async () => {
     const home = nextHome();
     ensureHome(home);
@@ -229,6 +239,14 @@ describe("add", () => {
     expect(loadPeers(host.home, loadIdentity(host.home))[0]?.tailscaleLogin).toBe("bob@example.com");
   });
 
+  test("--tailscale-login is refused unless this machine's own hub runs in tailscale mode", async () => {
+    const lanHost = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const carol = await fresh("carol");
+    expect(() => add(fakeIo(lanHost.home), { card: cardOf(guest.home).text, confirm: cardOf(guest.home).fp, tailscaleLogin: "bob@example.com" })).toThrow(/tailscale mode/);
+    expect(() => add(fakeIo(guest.home), { card: cardOf(carol.home).text, confirm: cardOf(carol.home).fp, tailscaleLogin: "carol@example.com" })).toThrow(/tailscale mode/);
+  });
+
   test("adding the same peer twice, or your own card, is refused", async () => {
     const host = await fresh("alice", true);
     const guest = await fresh("bob");
@@ -240,13 +258,18 @@ describe("add", () => {
   });
 
   test("a malformed --tailscale-login is refused by the peers schema, and list keeps working", async () => {
+    // Needs a tailscale-mode host: a plain (non-tailscale) hub or a guest now
+    // refuses --tailscale-login outright (see the usage-error test above),
+    // before ever reaching the peers schema this test means to exercise.
     const host = await fresh("alice", true);
+    const hub = loadHub(host.home);
+    writeFileSync(paths(host.home).hub, JSON.stringify({ ...hub, mode: "tailscale", name: "100.64.0.1", tailscaleLogin: "alice@example.com" }), { mode: 0o600 });
     const guest = await fresh("bob");
-    const c = cardOf(host.home);
-    expect(() => add(fakeIo(guest.home), { card: c.text, confirm: c.fp, tailscaleLogin: "a b" })).toThrow(ConfigError);
-    expect(loadPeers(guest.home, loadIdentity(guest.home))).toEqual([]);
-    expect(loadLink(guest.home)).toBeUndefined();
-    const io = fakeIo(guest.home);
+    const c = cardOf(guest.home);
+    expect(() => add(fakeIo(host.home), { card: c.text, confirm: c.fp, tailscaleLogin: "a b" })).toThrow(ConfigError);
+    expect(loadPeers(host.home, loadIdentity(host.home))).toEqual([]);
+    expect(loadLink(host.home)).toBeUndefined();
+    const io = fakeIo(host.home);
     expect(list(io)).toBe(0);
   });
 
