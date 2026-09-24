@@ -1,7 +1,8 @@
 import { request } from "node:http";
-import { createServer as createNetServer } from "node:net";
+import { connect as netConnect, createServer as createNetServer, type Socket } from "node:net";
 import nacl from "tweetnacl";
-import { afterEach, describe, expect, test } from "vitest";
+import WebSocket from "ws";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { toB64u } from "../../src/protocol/encoding.js";
 import { generateIdentity, peerId } from "../../src/protocol/identity.js";
 import { BindError } from "../../src/hub/bind.js";
@@ -15,6 +16,123 @@ import {
   startTestHub,
   type TestHub,
 } from "./helpers.js";
+
+const RAW_404 = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+
+// Builds a raw HTTP Upgrade request. `key` defaults to a valid
+// Sec-WebSocket-Key so callers only need to override it to force ws's own
+// handshake validation to reject the request.
+function rawUpgradeRequest(pathname: string, key = "dGhlIHNhbXBsZSBub25jZQ=="): string {
+  return (
+    `GET /${pathname} HTTP/1.1\r\n` +
+    `Host: 127.0.0.1\r\n` +
+    `Upgrade: websocket\r\n` +
+    `Connection: Upgrade\r\n` +
+    `Sec-WebSocket-Key: ${key}\r\n` +
+    `Sec-WebSocket-Version: 13\r\n` +
+    `\r\n`
+  );
+}
+
+function rawGetRequest(pathname: string): string {
+  return `GET ${pathname} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`;
+}
+
+// Sends a raw request over its own socket and collects every byte of the
+// response until the server closes the connection.
+function rawBytes(port: number, req: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect({ host: "127.0.0.1", port }, () => sock.write(req));
+    let data = "";
+    sock.on("data", (chunk: Buffer) => (data += chunk.toString("latin1")));
+    sock.on("close", () => resolve(data));
+    sock.on("error", reject);
+  });
+}
+
+// A single-frame WebSocket encoder, only as much as these protocol-error
+// tests need: small payloads, one frame, FIN always set.
+function encodeFrame(opcode: number, payload: Buffer, masked: boolean): Buffer {
+  if (payload.length >= 126) throw new Error("encodeFrame: payload too large for this helper");
+  const b0 = 0x80 | (opcode & 0x0f);
+  const b1 = (masked ? 0x80 : 0x00) | payload.length;
+  if (!masked) return Buffer.concat([Buffer.from([b0, b1]), payload]);
+  const mask = Buffer.from(nacl.randomBytes(4));
+  const maskedPayload = Buffer.alloc(payload.length);
+  for (let i = 0; i < payload.length; i++) maskedPayload[i] = payload[i]! ^ mask[i % 4]!;
+  return Buffer.concat([Buffer.from([b0, b1]), mask, maskedPayload]);
+}
+
+// Opens a raw socket and drives the WebSocket handshake by hand, so the
+// caller can then write frames ws's own client would refuse to construct.
+async function manualHandshake(port: number, pathname: string): Promise<Socket> {
+  const sock = netConnect({ host: "127.0.0.1", port });
+  await new Promise<void>((resolve, reject) => {
+    sock.once("connect", resolve);
+    sock.once("error", reject);
+  });
+  const key = Buffer.from(nacl.randomBytes(16)).toString("base64");
+  sock.write(rawUpgradeRequest(pathname, key));
+  await new Promise<void>((resolve, reject) => {
+    let buf = "";
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString("latin1");
+      if (!buf.includes("\r\n\r\n")) return;
+      sock.off("data", onData);
+      if (buf.startsWith("HTTP/1.1 101")) resolve();
+      else reject(new Error(`manualHandshake: unexpected response: ${buf}`));
+    };
+    sock.on("data", onData);
+    sock.on("error", reject);
+  });
+  return sock;
+}
+
+// Reads a single close frame's code off a socket that already completed the
+// WebSocket handshake. Small-payload, single-frame only, matching encodeFrame.
+function readCloseCode(sock: Socket): Promise<number> {
+  return new Promise((resolve) => {
+    let buf = Buffer.alloc(0);
+    sock.on("data", (chunk: Buffer) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length < 2) return;
+      if ((buf[0]! & 0x0f) !== 0x8) return;
+      const len = buf[1]! & 0x7f;
+      if (buf.length < 2 + len) return;
+      resolve(len >= 2 ? buf.readUInt16BE(2) : 1005);
+    });
+    sock.once("close", () => resolve(1006));
+  });
+}
+
+// Swaps out any existing listeners for `event` on process, runs `fn`, and
+// restores them afterward, returning whatever `fn` captured. Mirrors the
+// pattern the handler-throw test below uses for unhandledRejection.
+async function withCapturedProcessEvent(
+  event: "uncaughtException" | "unhandledRejection",
+  fn: () => Promise<void>,
+): Promise<unknown[]> {
+  // process.on's overloads key off a literal event name; this helper's job is
+  // to be generic across the two, so route through `any` here rather than
+  // fighting overload resolution — the runtime behavior is identical either
+  // way.
+  const proc = process as unknown as {
+    listeners(e: string): ((...a: unknown[]) => void)[];
+    removeAllListeners(e: string): void;
+    on(e: string, l: (...a: unknown[]) => void): void;
+  };
+  const saved = proc.listeners(event);
+  proc.removeAllListeners(event);
+  const captured: unknown[] = [];
+  proc.on(event, (err: unknown) => captured.push(err));
+  try {
+    await fn();
+    return captured;
+  } finally {
+    proc.removeAllListeners(event);
+    for (const l of saved) proc.on(event, l);
+  }
+}
 
 const host = generateIdentity("host");
 const alice = generateIdentity("alice");
@@ -33,8 +151,8 @@ async function hub(overrides = {}) {
   hubs.push(h);
   return h;
 }
-function probe(url: string) {
-  const p = new Probe(url);
+function probe(url: string, options?: ConstructorParameters<typeof Probe>[1]) {
+  const p = new Probe(url, options);
   probes.push(p);
   return p;
 }
@@ -270,9 +388,21 @@ describe("hub: limits", () => {
 
     pending[0]!.ws.terminate();
     await pending[0]!.closed;
-    await new Promise((r) => setTimeout(r, 50));
-    const tenth = probe(h.url);
-    await tenth.open();
+    // The client sees its own close before the hub's own 'close' handler
+    // (on a different socket) has necessarily run and freed the slot, so
+    // poll for it instead of guessing a fixed delay.
+    const deadline = Date.now() + 2000;
+    let tenth: Probe | undefined;
+    while (!tenth && Date.now() < deadline) {
+      const candidate = probe(h.url);
+      try {
+        await candidate.open();
+        tenth = candidate;
+      } catch {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+    expect(tenth?.opened).toBe(true);
   });
 
   test("authenticated connections don't count against the pending cap", async () => {
@@ -281,13 +411,35 @@ describe("hub: limits", () => {
     await authed(h, bob);
   });
 
-  test("an oversize frame is closed with 1009 (the one non-silent close)", async () => {
+  // 1009 is the one non-silent close OUR OWN pre-auth validation produces
+  // (the size cap). It is not the only non-silent close a pre-auth socket
+  // can see: ws itself closes with 1007/1002 for transport-level protocol
+  // errors before a frame ever reaches our code — see the ws-layer test
+  // below, which pins those separately.
+  test("an oversize frame is closed with 1009, our own size-limit rejection", async () => {
     const h = await hub();
     const p = probe(h.url);
     await p.open();
     p.send("x".repeat(129 * 1024));
     expect(await p.closed).toBe(1009);
     expect(p.raw).toEqual([]);
+  });
+
+  test("ws-layer protocol errors close with 1007/1002, not our own codes, and before we ever see a frame", async () => {
+    const h = await hub();
+
+    // Invalid UTF-8 in a text frame: ws validates this itself and closes
+    // with 1007. kill() can't pre-empt it — ws calls close(code) before it
+    // ever emits 'error' — so this reveals nothing about our own auth gate.
+    const utf8Sock = await manualHandshake(h.port, h.path);
+    utf8Sock.write(encodeFrame(0x1, Buffer.from([0xff, 0xfe, 0xfd]), true));
+    expect(await readCloseCode(utf8Sock)).toBe(1007);
+
+    // An unmasked client frame is a protocol violation per RFC 6455 5.1;
+    // ws closes with 1002, again before our own message handler ever runs.
+    const unmaskedSock = await manualHandshake(h.port, h.path);
+    unmaskedSock.write(encodeFrame(0x1, Buffer.from("hi"), false));
+    expect(await readCloseCode(unmaskedSock)).toBe(1002);
   });
 
   test("only authenticated connections are pinged", async () => {
@@ -387,6 +539,164 @@ describe("hub: routing", () => {
   });
 });
 
+describe("hub: upgrade abort safety", () => {
+  test("an RST right after a wrong-path or over-cap upgrade never crashes the process", async () => {
+    const h = await hub({ maxPending: 1, authTimeoutMs: 10_000 });
+
+    const captured = await withCapturedProcessEvent("uncaughtException", async () => {
+      // Node strips its own 'error' listener from the socket before emitting
+      // 'upgrade'. Our own socket.end(RAW_404)/socket.destroy() branches ran
+      // before ws ever attaches its listener, so without our own backstop an
+      // RST landing here used to be an uncaught EPIPE/ECONNRESET that took
+      // the whole process down — reproduced 200/200 times against this exact
+      // ws/Node pair before the fix.
+      // Wait for each raw socket's own 'close' before starting the next: firing
+      // resetAndDestroy() and immediately moving on lets the OS recycle the
+      // same ephemeral loopback port for the next connect() before the old
+      // one has fully unwound, which can misdeliver a stray RST onto the new
+      // connection (this bit the *filler* connection below under vitest,
+      // never under a plain, slower Node script — the fix here, not a source
+      // change, since a real client that carelessly reuses ports this fast
+      // has the same self-inflicted problem).
+      for (let i = 0; i < 50; i++) {
+        await new Promise<void>((resolve) => {
+          const sock = netConnect({ host: "127.0.0.1", port: h.port }, () => {
+            sock.write(rawUpgradeRequest("wrong"));
+            sock.resetAndDestroy();
+          });
+          sock.on("error", () => {});
+          sock.on("close", () => resolve());
+        });
+      }
+
+      // Fill the single pending slot so the next upgrades take the over-cap
+      // socket.destroy() branch instead of the wrong-path one.
+      const filler = probe(h.url);
+      await filler.open();
+      for (let i = 0; i < 20; i++) {
+        await new Promise<void>((resolve) => {
+          const sock = netConnect({ host: "127.0.0.1", port: h.port }, () => {
+            sock.write(rawUpgradeRequest(h.path));
+            sock.resetAndDestroy();
+          });
+          sock.on("error", () => {});
+          sock.on("close", () => resolve());
+        });
+      }
+
+      // Bounded window for any async error event to surface before we check.
+      await new Promise((r) => setTimeout(r, 200));
+
+      // Release filler's own pending slot: with maxPending: 1 it's the only
+      // one, and it stays open (never authenticates) for the whole block
+      // above on purpose, so it must be torn down before anything else can
+      // connect.
+      filler.ws.terminate();
+      await filler.closed;
+    });
+    expect(captured).toEqual([]);
+
+    // The hub must still be fully usable after all of the above.
+    const a = await authed(h, alice);
+    const b = await authed(h, bob);
+    a.send(sendFrame(bob, "r1"));
+    expect(await b.next()).toMatchObject({ type: "msg" });
+    expect(await a.next()).toEqual({ type: "ack", ref: "r1" });
+  });
+
+  test("aborted handshakes on the correct path release their pending slot instead of locking the hub out", async () => {
+    const h = await hub({ maxPending: 2, authTimeoutMs: 10_000 });
+    // More than maxPending, sequential and each awaited to completion: if the
+    // pending slot leaked (no release on an aborted handshake), the second of
+    // these would already saturate the cap forever, and every connection
+    // after it — including the legitimate one below — would be destroyed
+    // before ws even gets to reject the bad key.
+    for (let i = 0; i < 3; i++) {
+      await new Promise<void>((resolve, reject) => {
+        const sock = netConnect({ host: "127.0.0.1", port: h.port }, () => {
+          sock.write(rawUpgradeRequest(h.path, "nope"));
+        });
+        sock.on("data", () => {});
+        sock.on("close", () => resolve());
+        sock.on("error", reject);
+      });
+    }
+    const p = await authed(h, alice);
+    expect(p.opened).toBe(true);
+  });
+
+  test("a bad-key upgrade on the correct path gets the same bare 404, not ws's own 400 text/html body", async () => {
+    const h = await hub();
+    const raw = await rawBytes(h.port, rawUpgradeRequest(h.path, "nope"));
+    expect(raw).toBe(RAW_404);
+  });
+
+  test("the 404 for a wrong-path upgrade is byte-identical to a plain GET's 404", async () => {
+    const h = await hub();
+    const upgradeRaw = await rawBytes(h.port, rawUpgradeRequest("wrong"));
+    const getRaw = await rawBytes(h.port, rawGetRequest("/"));
+    expect(upgradeRaw).toBe(RAW_404);
+    expect(getRaw).toBe(RAW_404);
+  });
+});
+
+describe("hub: liveness and teardown correctness", () => {
+  test("a successful auth cancels the auth timeout, not just the pending cap", async () => {
+    const h = await hub({ authTimeoutMs: 100 });
+    const p = await authed(h, alice);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(p.ws.readyState).toBe(p.ws.OPEN);
+    await authed(h, bob);
+    p.send(sendFrame(bob, "r1"));
+    expect(await p.next()).toEqual({ type: "ack", ref: "r1" });
+  });
+
+  test("a disconnect detaches the peer from routing, not just from authed()", async () => {
+    const h = await hub();
+    const a = await authed(h, alice);
+    const b = await authed(h, bob);
+    b.ws.terminate();
+
+    // The hub's own 'close' handler for bob's socket runs asynchronously, so
+    // poll for the effect (routing sees bob as offline) instead of a fixed
+    // sleep.
+    let code: string | undefined;
+    let ref = 0;
+    const deadline = Date.now() + 2000;
+    while (code === undefined && Date.now() < deadline) {
+      const r = `p${ref++}`;
+      a.send(sendFrame(bob, r));
+      const reply = await a.next();
+      if (reply.type === "error" && reply.code === "offline") {
+        code = reply.code;
+      } else {
+        await new Promise((res) => setTimeout(res, 20));
+      }
+    }
+    expect(code).toBe("offline");
+  });
+
+  test("a client that never answers pings gets dropped by the sweep", async () => {
+    const h = await hub({ pingIntervalMs: 40, authTimeoutMs: 10_000 });
+    // autoPong:false (ws 8.21+) makes the client silently ignore pings
+    // instead of answering them, so the sweep's alive-tracking sees a truly
+    // dead peer rather than one this test is keeping alive by accident.
+    const p = probe(h.url, { autoPong: false });
+    await p.open();
+    p.send(helloFrame(alice, h.hubId));
+    const challenge = await p.next();
+    if (challenge.type !== "challenge") throw new Error("expected challenge");
+    p.send(authFrame(alice, h.hubId, challenge.nonce));
+    expect((await p.next()).type).toBe("ready");
+
+    const code = await Promise.race([
+      p.closed,
+      new Promise<string>((r) => setTimeout(() => r("still open"), 40 * 4 + 500)),
+    ]);
+    expect(code).toBe(1006);
+  });
+});
+
 describe("hub: startup validation", () => {
   test("a wrong-length hubId is rejected before anything is allocated", async () => {
     await expect(
@@ -439,19 +749,24 @@ describe("hub: startup validation", () => {
     if (addr === null || typeof addr === "string") throw new Error("expected an AddressInfo");
     const port = addr.port;
 
-    const before = process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
-    await expect(
-      startHub({
-        mode: "loopback",
-        host: "127.0.0.1",
-        path: "p",
-        hubId: host.signPub,
-        allow: new Map(),
-        port,
-      }),
-    ).rejects.toThrow();
-    const after = process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
-    expect(after).toBe(before);
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    try {
+      await expect(
+        startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: "p",
+          hubId: host.signPub,
+          allow: new Map(),
+          port,
+        }),
+      ).rejects.toThrow();
+      // A failed listen must never even create the ping interval: nothing
+      // would ever call close() to clear it.
+      expect(setIntervalSpy).not.toHaveBeenCalled();
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
 
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
@@ -490,12 +805,15 @@ describe("hub: fail-closed handler throws and teardown", () => {
   });
 
   test("close() stops the ping sweep", async () => {
-    const timeouts = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
-    const before = timeouts();
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
     const h = await startTestHub(host, []);
     hubs.push(h);
-    expect(timeouts()).toBe(before + 1);
+    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+    const handle = setIntervalSpy.mock.results[0]!.value;
     await h.close();
-    expect(timeouts()).toBe(before);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(handle);
+    setIntervalSpy.mockRestore();
+    clearIntervalSpy.mockRestore();
   });
 });

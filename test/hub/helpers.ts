@@ -46,8 +46,8 @@ export class Probe {
   readonly closed: Promise<number>;
   private waiters: (() => void)[] = [];
 
-  constructor(url: string) {
-    this.ws = new WebSocket(url);
+  constructor(url: string, options?: WebSocket.ClientOptions) {
+    this.ws = options ? new WebSocket(url, options) : new WebSocket(url);
     this.ws.on("open", () => (this.opened = true));
     this.ws.on("ping", () => this.pings++);
     this.ws.on("error", () => {});
@@ -74,7 +74,10 @@ export class Probe {
 
   // Returns frames in arrival order, each exactly once.
   async next(): Promise<HubFrame> {
-    const index = this.cursor++;
+    // Advance the cursor only once a frame is actually returned: if the wait
+    // below throws (closed before one arrived), a bumped cursor would skip a
+    // frame that shows up on a later, unrelated call.
+    const index = this.cursor;
     while (this.frames.length <= index) {
       await Promise.race([
         new Promise<void>((resolve) => this.waiters.push(resolve)),
@@ -83,6 +86,7 @@ export class Probe {
         }),
       ]);
     }
+    this.cursor++;
     return this.frames[index]!;
   }
 }
