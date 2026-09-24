@@ -38,4 +38,18 @@ describe("sealFor", () => {
     const broken = { ...alice, boxSec: new Uint8Array(3) };
     expect(() => sealFor(broken, bob, "x", 1)).toThrow(/wrong length/);
   });
+
+  test("eve can't open a message sealed for bob, even knowing the ciphertext", () => {
+    const out = sealFor(alice, bob, "for bob's eyes only", 1);
+    if (!out.ok) throw new Error(out.error);
+    const eve = generateIdentity("eve");
+    expect(open(out.sealed, alice.boxPub, eve.boxSec)).toBeNull();
+  });
+
+  test("opening with a sender key that isn't the actual sender's fails, not silently reads as someone else", () => {
+    const out = sealFor(alice, bob, "hello", 1);
+    if (!out.ok) throw new Error(out.error);
+    const eve = generateIdentity("eve");
+    expect(open(out.sealed, eve.boxPub, bobId.boxSec)).toBeNull();
+  });
 });
