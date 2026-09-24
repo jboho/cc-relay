@@ -492,5 +492,8 @@ export function resolveEndpoint(
     if (!owner) throw new ConfigError(`link.json points at a hub whose key is not one of your peers`, "invalid");
     return { hubId: owner.signPub, url: `ws://${link.host}:${link.port}/${link.path}` };
   }
-  throw new ConfigError("no hub configured: run `cc-relay init --host` or `cc-relay add <host card>`", "missing");
+  // Not "run cc-relay init --host": self was already loaded above, so this
+  // identity exists, and init refuses once identity.json is already there.
+  // Adding a host's card is the only path that actually works from here.
+  throw new ConfigError("no hub configured: this identity already exists, so init can't set one up now; run `cc-relay add <host card>`", "missing");
 }

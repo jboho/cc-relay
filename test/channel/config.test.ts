@@ -441,6 +441,20 @@ describe("hub, link, and endpoint", () => {
     }
   });
 
+  test("the missing-hub-or-link message doesn't point at a refusing init --host", () => {
+    const { home, self } = initHome();
+    const bind = () => "127.0.0.1";
+    let message = "";
+    try {
+      resolveEndpoint(home, self, [], bind);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toMatch(/no hub configured/);
+    expect(message).not.toMatch(/init --host/);
+    expect(message).toMatch(/add <host card>/);
+  });
+
   test("no hub or link is missing; both at once is invalid", () => {
     const { home, self } = initHome();
     const bind = () => "127.0.0.1";
