@@ -22,13 +22,13 @@ describe("escapeChannelTags", () => {
   });
 
   test.each([
-    ["<​/channel>", "&lt;​/channel>"], // zero-width space right after <
-    ["<⁠/channel>", "&lt;⁠/channel>"], // word joiner right after <
-    ["<­/channel>", "&lt;­/channel>"], // soft hyphen right after <
-    ["</chan​nel>", "&lt;/chan​nel>"], // zero-width space inside the word
+    ["<\u200b/channel>", "&lt;\u200b/channel>"], // zero-width space right after <
+    ["<\u2060/channel>", "&lt;\u2060/channel>"], // word joiner right after <
+    ["<\u00ad/channel>", "&lt;\u00ad/channel>"], // soft hyphen right after <
+    ["</chan\u200bnel>", "&lt;/chan\u200bnel>"], // zero-width space inside the word
     ["<\n/channel>", "&lt;\n/channel>"], // newline between < and /
-    ["＜/channel>", "&lt;/channel>"], // fullwidth <
-    ["﹤/channel>", "&lt;/channel>"], // small form <
+    ["\uff1c/channel>", "&lt;/channel>"], // fullwidth <
+    ["\ufe64/channel>", "&lt;/channel>"], // small form <
   ])("escapes the disguised tag %j", (input, output) => {
     expect(escapeChannelTags(input)).toBe(output);
   });
