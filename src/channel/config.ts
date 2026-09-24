@@ -189,12 +189,12 @@ function readJson(path: string, what: string): unknown | undefined {
   // test: exercising the race would need a second process swapping the path
   // mid-syscall, which this suite has no way to simulate; reverting to
   // readFileSync(path) here still passes every test in this file.
+  // No EACCES/EPERM mapping here: openPrivate already mapped that at open time
+  // above, and a permission check on an already-open fd can't fail again on
+  // read (POSIX enforces permissions at open(), not per read()).
   let text: string;
   try {
     text = readFileSync(fd, "utf8");
-  } catch (err) {
-    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not readable`, "permissions", { cause: err });
-    throw err;
   } finally {
     closeSync(fd);
   }
@@ -256,10 +256,12 @@ export function loadIdentity(home: string): Identity {
     // Same TOCTOU-closing reasoning as readJson: read from the fd openPrivate
     // just validated, not a fresh readFileSync(path). Not covered by a test,
     // for the same reason (needs a concurrent process swapping the path).
+    // No EACCES/EPERM mapping here either: same as readJson, openPrivate
+    // already mapped that at open time; a read on an already-open fd can't
+    // fail with a fresh permission error.
     return parseIdentity(readFileSync(fd, "utf8"));
   } catch (err) {
     if (err instanceof IdentityError) throw new ConfigError(`${path}: ${err.message}`, "invalid", { cause: err });
-    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${path} is not readable`, "permissions", { cause: err });
     throw err;
   } finally {
     closeSync(fd);
