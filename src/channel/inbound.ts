@@ -1,8 +1,19 @@
 // Claude Code wraps channel content in <channel ...> tags. A peer that writes
 // its own closing tag could make the rest of its text read as if it came from
 // outside the channel, so any tag-shaped "channel" gets its "<" escaped.
+// The model reads this text through its own tokenizer, not a strict parser,
+// so a disguised tag still reads as "<channel" to it even when a literal
+// string match would miss it: invisible Unicode format characters (\p{Cf} —
+// zero-width space, word joiner, soft hyphen, etc.) inserted between any
+// characters, and fullwidth/small-form "<" (＜ U+FF1C, ﹤ U+FE64) standing in
+// for the opening bracket. This does not catch lookalike letters borrowed
+// from other scripts (e.g. Cyrillic "с" for "c") — a known limit.
+const GAP = "[\\s\\p{Cf}]*";
+const WORD = [..."channe"].map((c) => `${c}\\p{Cf}*`).join("") + "l";
+const TAG_RE = new RegExp(`[<\\uFF1C\\uFE64](${GAP}\\/?${GAP}${WORD})`, "giu");
+
 export function escapeChannelTags(text: string): string {
-  return text.replace(/<(\s*\/?\s*channel)/gi, "&lt;$1");
+  return text.replace(TAG_RE, "&lt;$1");
 }
 
 export const INBOUND_PER_MIN = 10;
@@ -53,7 +64,7 @@ export function rateLimitNotice(): ChannelNotification {
   return {
     method: "notifications/claude/channel",
     params: {
-      content: `cc-relay: more than ${INBOUND_PER_MIN} peer messages arrived in a minute; the rest are being dropped.`,
+      content: `cc-relay: more than the per-minute limit of peer messages arrived; the rest are being dropped.`,
       meta: { notice: "rate_limited" },
     },
   };
