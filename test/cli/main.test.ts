@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
-import { loadHub, loadIdentity } from "../../src/channel/config.js";
+import { loadHub, loadIdentity, paths } from "../../src/channel/config.js";
 import { resolveTailscale, TailscaleError } from "../../src/hub/tailscale.js";
 import { tempHomes } from "../channel/helpers.js";
 import { fakeIo } from "./helpers.js";
@@ -36,14 +36,26 @@ vi.mock("../../src/hub/tailscale.js", async (importOriginal) => {
 const nextHome = tempHomes("cli-main");
 
 describe("main", () => {
-  test("no command prints usage and exits 64; help exits 0", async () => {
-    const io = fakeIo(nextHome());
-    expect(await main([], io)).toBe(EX_USAGE);
-    expect(io.stdout).toEqual([USAGE]);
-    expect(await main(["--help"], fakeIo(nextHome()))).toBe(0);
+  test("help, --help and -h print usage on stdout and exit 0", async () => {
+    for (const argv of [["help"], ["--help"], ["-h"]]) {
+      const io = fakeIo(nextHome());
+      expect(await main(argv, io)).toBe(0);
+      expect(io.stdout).toEqual([USAGE]);
+      expect(io.stderr).toEqual([]);
+    }
+  });
+
+  test("a subcommand followed by --help or -h prints usage on stdout and exits 0, same as bare --help", async () => {
+    for (const argv of [["init", "--help"], ["add", "-h"], ["list", "--help"], ["remove", "--help"]]) {
+      const io = fakeIo(nextHome());
+      expect(await main(argv, io)).toBe(0);
+      expect(io.stdout).toEqual([USAGE]);
+      expect(io.stderr).toEqual([]);
+    }
   });
 
   test.each([
+    [[], "no command given"],
     [["frobnicate"], "unknown command: frobnicate"],
     [["init"], "init needs --alias"],
     [["init", "--alias", "a", "--bogus"], "Unknown option"],
@@ -113,6 +125,21 @@ describe("main", () => {
       expect(io.stderr[0]).toContain("23997");
     } finally {
       await new Promise((resolve) => blocker.close(resolve));
+    }
+  });
+
+  test("errno causes are appended to any expected setup error's message, not just PortError's", async () => {
+    const home = nextHome();
+    await main(["init", "--alias", "alice"], fakeIo(home));
+    chmodSync(paths(home).identity, 0o000);
+    try {
+      const io = fakeIo(home);
+      expect(await main(["list"], io)).toBe(1);
+      expect(io.stderr).toHaveLength(1);
+      expect(io.stderr[0]).toMatch(/^cc-relay: /);
+      expect(io.stderr[0]).toContain("EACCES");
+    } finally {
+      chmodSync(paths(home).identity, 0o600);
     }
   });
 

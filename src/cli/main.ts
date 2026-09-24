@@ -52,6 +52,14 @@ function positional(args: string[], name: string): string {
 }
 
 async function dispatch(command: string, rest: string[], io: Io): Promise<number> {
+  // Checked before parseArgs/manual argument checks, since none of the
+  // subcommands define --help/-h themselves: parseArgs's strict mode would
+  // otherwise reject it as an unknown option, and the no-arguments commands
+  // would reject it as an unexpected argument.
+  if (rest.includes("--help") || rest.includes("-h")) {
+    io.out(USAGE);
+    return 0;
+  }
   switch (command) {
     case "init": {
       const { values, positionals } = parseArgs({
@@ -118,11 +126,14 @@ async function dispatch(command: string, rest: string[], io: Io): Promise<number
 
 export async function main(argv: readonly string[], io: Io): Promise<number> {
   const [command, ...rest] = argv;
-  if (command === undefined || command === "help" || command === "--help" || command === "-h") {
+  if (command === "help" || command === "--help" || command === "-h") {
     io.out(USAGE);
-    return command === undefined ? EX_USAGE : 0;
+    return 0;
   }
   try {
+    // Consistent with every other usage error: usage goes to stderr and this
+    // exits 64, rather than printing to stdout the way --help does.
+    if (command === undefined) throw new UsageError("no command given");
     return await dispatch(command, rest, io);
   } catch (err) {
     // parseArgs throws TypeErrors with ERR_PARSE_ARGS_* codes for bad flags.
@@ -134,12 +145,12 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
     }
     if (EXPECTED.some((E) => err instanceof E)) {
       let message = (err as Error).message;
-      // PortError's own message doesn't always carry the errno (e.g. pickPort's
-      // "cannot bind host:port"); append it here rather than in every thrower.
-      if (err instanceof PortError) {
-        const code = (err.cause as NodeJS.ErrnoException | undefined)?.code;
-        if (code && !message.includes(code)) message += ` (${code})`;
-      }
+      // Not every thrower's message carries its errno (e.g. pickPort's "cannot
+      // bind host:port"); append it here rather than in every thrower. Guarded
+      // by the includes() check so a message that already embeds its code
+      // (e.g. ensureHome's) doesn't get it appended a second time.
+      const code = ((err as Error).cause as NodeJS.ErrnoException | undefined)?.code;
+      if (code && !message.includes(code)) message += ` (${code})`;
       io.err(`cc-relay: ${message}`);
       return 1;
     }
