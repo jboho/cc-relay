@@ -550,14 +550,10 @@ describe("hub: upgrade abort safety", () => {
       // RST landing here used to be an uncaught EPIPE/ECONNRESET that took
       // the whole process down — reproduced 200/200 times against this exact
       // ws/Node pair before the fix.
-      // Wait for each raw socket's own 'close' before starting the next: firing
-      // resetAndDestroy() and immediately moving on lets the OS recycle the
-      // same ephemeral loopback port for the next connect() before the old
-      // one has fully unwound, which can misdeliver a stray RST onto the new
-      // connection (this bit the *filler* connection below under vitest,
-      // never under a plain, slower Node script — the fix here, not a source
-      // change, since a real client that carelessly reuses ports this fast
-      // has the same self-inflicted problem).
+      // Wait for each raw socket's own 'close' before starting the next:
+      // otherwise `filler` below can end up opening while some of this
+      // loop's connections are still in flight instead of strictly after it,
+      // making the "fill the one pending slot" setup below unreliable.
       for (let i = 0; i < 50; i++) {
         await new Promise<void>((resolve) => {
           const sock = netConnect({ host: "127.0.0.1", port: h.port }, () => {
@@ -623,6 +619,76 @@ describe("hub: upgrade abort safety", () => {
     }
     const p = await authed(h, alice);
     expect(p.opened).toBe(true);
+  });
+
+  test("a half-open peer that never closes doesn't hold its pending slot forever", async () => {
+    const h = await hub({ maxPending: 2, authTimeoutMs: 300 });
+    // Node's http sockets set allowHalfOpen, so our end() only sends our own
+    // FIN; without an explicit destroy, the socket (and the pending release
+    // tied to its 'close') waits on the peer's FIN, which a client with
+    // allowHalfOpen: true and no auth timer on this path can withhold forever.
+    const rawSockets: Socket[] = [];
+    try {
+      const terminated = await Promise.all(
+        Array.from({ length: 2 }, () => {
+          return new Promise<void>((resolve) => {
+            const sock = netConnect({ host: "127.0.0.1", port: h.port, allowHalfOpen: true }, () => {
+              sock.write(rawUpgradeRequest(h.path, "nope"));
+            });
+            rawSockets.push(sock);
+            sock.on("error", () => {});
+            // A paused readable stream never emits 'end' until its buffered
+            // data (the 404 response) is read out, so this has to drain it —
+            // without it the socket sits on unread data forever and neither
+            // 'end' nor 'close' fires, independent of the server's own close.
+            sock.on("data", () => {});
+            // Never end() or destroy() this socket ourselves: the whole point
+            // is to see the server close its side without our cooperation.
+            sock.once("end", () => resolve());
+            sock.once("close", () => resolve());
+          });
+        }),
+      );
+      expect(terminated).toHaveLength(2);
+
+      const p = await authed(h, alice);
+      expect(p.opened).toBe(true);
+    } finally {
+      for (const sock of rawSockets) sock.destroy();
+    }
+  });
+
+  test("pending never goes negative across auth/disconnect cycles, including a superseded login", async () => {
+    const h = await hub({ maxPending: 2, authTimeoutMs: 10_000 });
+    // release() runs unconditionally in the close handler, even for a
+    // connection already released at auth time. Without the idempotency
+    // guard, each of these cycles double-decrements pending, drifting it
+    // negative and silently loosening the cap below.
+    for (let i = 0; i < 3; i++) {
+      const p = await authed(h, alice);
+      p.ws.terminate();
+      await p.closed;
+    }
+    // A superseded login releases the old connection at its own auth time,
+    // then again when router.attach's kick closes it — the same double
+    // release, from a different trigger.
+    const old = await authed(h, alice);
+    const fresh = await authed(h, alice);
+    expect(await old.closed).toBe(4001);
+    fresh.ws.terminate();
+    await fresh.closed;
+
+    // If pending drifted negative above, opening exactly maxPending
+    // unauthenticated connections wouldn't be enough to saturate the cap.
+    const held: Probe[] = [];
+    for (let i = 0; i < 2; i++) {
+      const p = probe(h.url);
+      await p.open();
+      held.push(p);
+    }
+    const extra = probe(h.url);
+    await extra.closed;
+    expect(extra.opened).toBe(false);
   });
 
   test("a bad-key upgrade on the correct path gets the same bare 404, not ws's own 400 text/html body", async () => {
@@ -807,13 +873,16 @@ describe("hub: fail-closed handler throws and teardown", () => {
   test("close() stops the ping sweep", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-    const h = await startTestHub(host, []);
-    hubs.push(h);
-    expect(setIntervalSpy).toHaveBeenCalledTimes(1);
-    const handle = setIntervalSpy.mock.results[0]!.value;
-    await h.close();
-    expect(clearIntervalSpy).toHaveBeenCalledWith(handle);
-    setIntervalSpy.mockRestore();
-    clearIntervalSpy.mockRestore();
+    try {
+      const h = await startTestHub(host, []);
+      hubs.push(h);
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      const handle = setIntervalSpy.mock.results[0]!.value;
+      await h.close();
+      expect(clearIntervalSpy).toHaveBeenCalledWith(handle);
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
   });
 });
