@@ -7,7 +7,7 @@ import { resolveTailscale } from "../hub/tailscale.js";
 import { tailscaleWhois, type Whois } from "../hub/whois.js";
 import { HubClient } from "../channel/client.js";
 import { ConfigError, hubAllow, loadHub, loadIdentity, loadPeers, paths, relayHome, resolveEndpoint } from "../channel/config.js";
-import { checkThisSession, type ProcLookup } from "../channel/launch.js";
+import { checkLaunch, findClaudeArgv, type LaunchCheck, type ProcLookup } from "../channel/launch.js";
 import { createChannelServer } from "../channel/server.js";
 import type { InboundFrame } from "../protocol/receive.js";
 import type { Io } from "./io.js";
@@ -111,8 +111,13 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
       ...(deps.interfaces ? { interfaces: deps.interfaces } : {}),
     }),
   );
-  const launch = checkThisSession(deps.ppid ?? process.ppid, deps.lookup);
-  if (!launch.ok) io.err(`cc-relay: send is blocked: ${launch.reason}`);
+  // The claude ancestor's argv is found once, since a process's argv can't
+  // change; but its --settings file can be edited mid-session, so checkLaunch
+  // re-reads it on every call rather than caching the result here.
+  const argv = findClaudeArgv(deps.ppid ?? process.ppid, deps.lookup);
+  const launch = (): LaunchCheck => (argv.ok ? checkLaunch(argv.argv) : { ok: false, reason: argv.reason });
+  const initial = launch();
+  if (!initial.ok) io.err(`cc-relay: send is blocked: ${initial.reason}`);
 
   // Replaced by created.deliver below, before client.start() begins passing
   // inbound frames through onMessage; no frame can reach this placeholder.

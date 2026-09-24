@@ -22,7 +22,10 @@ export interface ChannelDeps {
   identity: Identity;
   peers: readonly StoredPeer[];
   hub: Pick<HubClient, "send" | "state">;
-  launch: LaunchCheck;
+  // A function, not a value: the settings file backing this can change mid-session
+  // (an agent edit could drop the ask rule), so it's re-read on every call rather
+  // than trusted from channel startup.
+  launch: () => LaunchCheck;
   now: () => number;
   log: (line: string) => void;
   gate?: InboundGate;
@@ -90,9 +93,10 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
 
   server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
     if (req.params.name === "peers") {
+      const launch = deps.launch();
       const lines = [
         `hub: ${deps.hub.state}`,
-        deps.launch.ok ? "send: enabled" : `send: blocked (${deps.launch.reason})`,
+        launch.ok ? "send: enabled" : `send: blocked (${launch.reason})`,
         ...(deps.peers.length === 0
           ? ["no peers yet: add one with `cc-relay add <card>`"]
           : deps.peers.map((p) => `${p.alias}  ${fingerprint(p.signPub, p.boxPub)}`)),
@@ -102,9 +106,11 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
     if (req.params.name !== "send") return fail(`unknown tool: ${req.params.name}`);
 
     // Checked first, so a session launched without the ask rule can't send at
-    // all, whatever else is wrong with the call.
-    if (!deps.launch.ok) {
-      return fail(`blocked: ${deps.launch.reason}. Start the session with the claude-relay alias, then run \`cc-relay doctor\`.`);
+    // all, whatever else is wrong with the call. Re-read on every call, not
+    // cached from startup, since the settings file can change mid-session.
+    const launch = deps.launch();
+    if (!launch.ok) {
+      return fail(`blocked: ${launch.reason}. Start the session with the claude-relay alias, then run \`cc-relay doctor\`.`);
     }
     const args = SendArgs.safeParse(req.params.arguments ?? {});
     if (!args.success) return fail("invalid arguments: send needs {to: <peer alias>, text: <non-empty string>}");

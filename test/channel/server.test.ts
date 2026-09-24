@@ -34,11 +34,12 @@ async function setup(opts: { launch?: LaunchCheck; result?: SendResult; peers?: 
       return opts.result ?? { ok: true as const };
     },
   };
+  let launch = opts.launch ?? OK;
   const { server, deliver } = createChannelServer({
     identity: alice,
     peers: opts.peers ?? [bob],
     hub,
-    launch: opts.launch ?? OK,
+    launch: () => launch,
     now: () => NOW,
     log: (l) => logs.push(l),
   });
@@ -56,7 +57,10 @@ async function setup(opts: { launch?: LaunchCheck; result?: SendResult; peers?: 
     const r = (await client.callTool({ name, arguments: args })) as { content: { text: string }[]; isError?: boolean };
     return { text: r.content[0]?.text ?? "", isError: r.isError === true };
   };
-  return { client, call, deliver, sent, logs, notes };
+  const setLaunch = (l: LaunchCheck) => {
+    launch = l;
+  };
+  return { client, call, deliver, sent, logs, notes, setLaunch };
 }
 
 function fromBob(text: string, overrides: Partial<{ from: Identity; to: string; ts: number; id: string }> = {}): InboundFrame {
@@ -110,6 +114,19 @@ describe("send", () => {
     expect(r.text).toMatch(/^blocked: claude was launched without --settings/);
     expect(sent).toEqual([]);
     expect((await call("peers")).text).toContain("send: blocked (claude was launched without --settings)");
+  });
+
+  test("re-checks the launch status on every call, not just once at startup", async () => {
+    const { call, setLaunch } = await setup();
+    expect(await call("send", { to: "bob", text: "hi" })).toEqual({ text: "sent", isError: false });
+    setLaunch({ ok: false, reason: "claude was launched without --settings" });
+    const blocked = await call("send", { to: "bob", text: "sneaky" });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.text).toMatch(/^blocked: claude was launched without --settings/);
+    expect((await call("peers")).text).toContain("send: blocked (claude was launched without --settings)");
+    setLaunch({ ok: true, settings: "/relay/settings.json" });
+    expect(await call("send", { to: "bob", text: "back again" })).toEqual({ text: "sent", isError: false });
+    expect((await call("peers")).text).toContain("send: enabled");
   });
 
   test.each([
@@ -241,7 +258,7 @@ describe("deliver never rejects", () => {
       identity: alice,
       peers: [bob],
       hub,
-      launch: OK,
+      launch: () => OK,
       now: () => NaN,
       log: (l) => logs.push(l),
     });
@@ -268,7 +285,7 @@ describe("deliver never rejects", () => {
       identity: alice,
       peers: [bob],
       hub,
-      launch: OK,
+      launch: () => OK,
       now: () => NaN,
       log: (l) => logs.push(l),
     });
