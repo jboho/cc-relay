@@ -47,7 +47,7 @@ export const CLOCK_FAIL_S = 60;
 export const GRANT_PROBE_PORTS = [22, 445, 548, 3283, 5900, 8080] as const;
 const GRANT_PROBE_TIMEOUT_MS = 1500;
 
-const PROBE_DETAIL: Record<Exclude<ProbeOutcome, "ok">, string> = {
+const PROBE_DETAIL: Record<Exclude<ProbeOutcome, "ok" | "unreachable">, string> = {
   refused: "connection refused: is cc-relay hub running on the host?",
   timeout: "no answer: check the Wi-Fi allows device-to-device traffic (client isolation), the host's firewall, and that the host is awake",
   unresolved: "the hub's host name doesn't resolve on this network",
@@ -164,15 +164,20 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   }
   const outcome = await (deps.probe ?? probeHub)(endpoint.url, endpoint.hubId, self);
   if (outcome === "ok") add("PASS", "hub", `${endpoint.url.replace(/\/[^/]*$/, "/…")} accepted this machine's hello`);
-  else add("FAIL", "hub", PROBE_DETAIL[outcome]);
+  else if (outcome === "unreachable") {
+    // No error text survives past probeHub's ProbeOutcome return type, so this stays
+    // generic rather than carrying the raw socket error (EHOSTDOWN, EPERM, ...).
+    const hostPort = /^ws:\/\/([^/]+)\//.exec(endpoint.url)?.[1] ?? endpoint.url;
+    add("FAIL", "hub", `could not reach ${hostPort} (network error): check Tailscale/LAN connectivity and the macOS Local Network permission`);
+  } else add("FAIL", "hub", PROBE_DETAIL[outcome]);
 
   if (link?.via === "tailscale") {
     // canConnect returns false both for "closed" and for "never got there", so an
     // all-false scan can't tell a clean grant from an unreachable host. Gate on the
-    // hub probe's outcome instead: anything past a bare timeout/unresolved means a
-    // TCP connection to this host actually happened, so a closed-port reading means
-    // something. Otherwise skip rather than print a PASS that verified nothing.
-    const reached = outcome !== "timeout" && outcome !== "unresolved";
+    // hub probe's outcome with an allowlist, not a denylist: only outcomes that prove
+    // a TCP connection actually reached the host count as reached. Any other or future
+    // outcome (unreachable, or one not yet invented) skips rather than risks a false PASS.
+    const reached = outcome === "ok" || outcome === "refused" || outcome === "notfound" || outcome === "rejected";
     if (!reached) {
       add("SKIP", "grant", `could not reach ${link.host}; grant not verified`);
     } else {

@@ -1,4 +1,5 @@
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import { createServer, type Server } from "node:net";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -122,6 +123,11 @@ describe("doctor", () => {
       status: "FAIL",
       detail: expect.stringContaining("client isolation"),
     });
+
+    const unreachable = (await byName(stopped.guestHome, healthy({ probe: async () => "unreachable" }))).hub;
+    expect(unreachable).toMatchObject({ status: "FAIL" });
+    expect(unreachable?.detail).not.toMatch(/allowlist/i);
+    expect(unreachable?.detail).not.toMatch(/clock/i);
   });
 
   test("the host probes its own hub", async () => {
@@ -221,6 +227,17 @@ describe("doctor", () => {
       expect(tried).toEqual([]);
     });
 
+    test("skips rather than PASS on an unmapped socket error too", async () => {
+      const home = await tailscaleGuest();
+      const tried: number[] = [];
+      const checks = await byName(
+        home,
+        healthy({ ...ok, probe: async () => "unreachable" as const, connectable: async (_h, port) => (tried.push(port), false) }),
+      );
+      expect(checks.grant).toMatchObject({ status: "SKIP", detail: expect.stringContaining("could not reach") });
+      expect(tried).toEqual([]);
+    });
+
     test("excludes the hub's own port from the grant probe", async () => {
       const home = await tailscaleGuest();
       const link = loadLink(home);
@@ -256,6 +273,21 @@ describe("probe helpers", () => {
   test("probeHub reports an unresolvable host", async () => {
     const self = generateIdentity("x");
     expect(await probeHub(`ws://cc-relay-test.invalid:1/${"P".repeat(22)}`, self.signPub, self, 3000)).toBe("unresolved");
+  });
+
+  test("probeHub reports a real protocol rejection as \"rejected\", not \"unreachable\"", async () => {
+    // A plain net.Server that destroys the socket races between an 'error' and a
+    // 'close' event; an HTTP 500 on the upgrade request is a deterministic way to
+    // exercise the same "the host answered, but not with a challenge" path.
+    const rejecting: HttpServer = createHttpServer((_req, res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((r) => rejecting.listen(0, "127.0.0.1", r));
+    cleanup.push(() => new Promise((r) => rejecting.close(r)));
+    const port = (rejecting.address() as { port: number }).port;
+    const self = generateIdentity("x");
+    expect(await probeHub(`ws://127.0.0.1:${port}/${"P".repeat(22)}`, self.signPub, self, 3000)).toBe("rejected");
   });
 
   test("canConnect tells an open port from a closed one", async () => {

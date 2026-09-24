@@ -6,7 +6,7 @@ import { parseHubFrame } from "../protocol/frames.js";
 import type { Identity } from "../protocol/identity.js";
 import { MAX_PAYLOAD_BYTES } from "../hub/server.js";
 
-export type ProbeOutcome = "ok" | "refused" | "timeout" | "unresolved" | "notfound" | "rejected";
+export type ProbeOutcome = "ok" | "refused" | "timeout" | "unresolved" | "notfound" | "rejected" | "unreachable";
 
 // Stops at the challenge on purpose. Answering it would authenticate as this
 // identity, and the hub would supersede (close 4001) the live relay session
@@ -31,7 +31,11 @@ export function probeHub(url: string, hubId: Uint8Array, self: Identity, timeout
       else if (err.code === "ENOTFOUND" || err.code === "EAI_AGAIN") finish("unresolved");
       else if (err.code === "ETIMEDOUT" || err.code === "EHOSTUNREACH" || err.code === "ENETUNREACH") finish("timeout");
       else if (/handshake has timed out/i.test(err.message)) finish("timeout");
-      else finish("rejected");
+      // Anything else (EHOSTDOWN, ENETDOWN, EADDRNOTAVAIL, EPERM, EACCES, ...) means
+      // no TCP connection to the host happened — unlike "rejected", which is reserved
+      // for a real protocol-level answer (close, a non-404 unexpected-response, or a
+      // reply that isn't a challenge).
+      else finish("unreachable");
     });
     ws.on("open", () => ws.send(JSON.stringify(helloFor(self, hubId, Date.now()))));
     ws.on("message", (data) => finish(parseHubFrame(data.toString())?.type === "challenge" ? "ok" : "rejected"));
