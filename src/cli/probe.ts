@@ -68,6 +68,9 @@ export function sntpOffset(server = "time.apple.com"): Promise<number | null> {
   return new Promise((resolve) => {
     // A non-zero exit is deliberately not checked: a failed lookup leaves stdout
     // unparseable, parseSntp returns null, and the caller turns that into WARN.
-    execFile("sntp", ["-t", "2", server], { timeout: 10_000 }, (_err, stdout) => resolve(parseSntp(String(stdout))));
+    // Absolute path rather than PATH lookup: unlike the Tailscale CLI, sntp is
+    // a fixed macOS system binary, so nothing earlier on PATH should be able
+    // to stand in for it.
+    execFile("/usr/bin/sntp", ["-t", "2", server], { timeout: 10_000 }, (_err, stdout) => resolve(parseSntp(String(stdout))));
   });
 }

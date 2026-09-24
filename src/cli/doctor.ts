@@ -171,7 +171,10 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   else if (outcome === "unreachable") {
     // No error text survives past probeHub's ProbeOutcome return type, so this stays
     // generic rather than carrying the raw socket error (EHOSTDOWN, EPERM, ...).
-    const hostPort = /^ws:\/\/([^/]+)\//.exec(endpoint.url)?.[1] ?? endpoint.url;
+    // resolveEndpoint only ever builds a ws:// URL today, so wss support here
+    // has no reachable call path to test; kept in sync anyway in case that
+    // changes without this regex being revisited.
+    const hostPort = /^wss?:\/\/([^/]+)\//.exec(endpoint.url)?.[1] ?? endpoint.url;
     add("FAIL", "hub", `could not reach ${hostPort} (network error): check Tailscale/LAN connectivity and the macOS Local Network permission`);
   } else add("FAIL", "hub", PROBE_DETAIL[outcome]);
 
