@@ -260,4 +260,31 @@ describe("deliver never rejects", () => {
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  test("a non-string from doesn't crash the catch log line", async () => {
+    const logs: string[] = [];
+    const hub = { state: "ready" as const, send: async () => ({ ok: true as const }) };
+    const { deliver } = createChannelServer({
+      identity: alice,
+      peers: [bob],
+      hub,
+      launch: OK,
+      now: () => NaN,
+      log: (l) => logs.push(l),
+    });
+    const frame = { ...fromBob("secret text"), from: 12345 as unknown as string };
+    let unhandled: unknown;
+    const onUnhandled = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(deliver(frame)).resolves.toBeUndefined();
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain("12345");
+      expect(unhandled).toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });

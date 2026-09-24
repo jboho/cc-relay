@@ -141,7 +141,10 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
       }
     } catch (err) {
       const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-      deps.log(`cc-relay: could not deliver a message from ${frame.from.slice(0, 8)}…: ${detail}`);
+      // frame comes from HubFrame parsing upstream and is typed as InboundFrame here,
+      // but this catch also runs for wiring bugs (e.g. a non-finite clock) where that
+      // guarantee doesn't hold, so from is coerced defensively rather than assumed.
+      deps.log(`cc-relay: could not deliver a message from ${String(frame.from).slice(0, 8)}…: ${detail}`);
     }
   }
 
