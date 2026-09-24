@@ -155,8 +155,13 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
       // bind host:port"); append it here rather than in every thrower. Guarded
       // by the includes() check so a message that already embeds its code
       // (e.g. ensureHome's) doesn't get it appended a second time.
+      // Only an errno-shaped code (EACCES, ENOTDIR, ...) is appended: a plain
+      // cause.code also catches Node-internal codes like
+      // ERR_ENCODING_INVALID_ENCODED_DATA (e.g. from decodeCard's fatal
+      // TextDecoder on a non-UTF-8 card), which would leak an implementation
+      // detail into what's meant to be a user-facing message.
       const code = ((err as Error).cause as NodeJS.ErrnoException | undefined)?.code;
-      if (code && !message.includes(code)) message += ` (${code})`;
+      if (code && /^E[A-Z0-9]+$/.test(code) && !message.includes(code)) message += ` (${code})`;
       io.err(`cc-relay: ${message}`);
       return 1;
     }

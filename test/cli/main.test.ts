@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
 import { loadHub, loadIdentity, paths } from "../../src/channel/config.js";
+import { toB64u } from "../../src/protocol/encoding.js";
 import { resolveTailscale, TailscaleError } from "../../src/hub/tailscale.js";
 import { tempHomes } from "../channel/helpers.js";
 import { fakeIo } from "./helpers.js";
@@ -212,6 +213,21 @@ describe("main", () => {
       chmodSync(parent, 0o700);
       rmSync(parent, { recursive: true, force: true });
     }
+  });
+
+  test("a card that is valid base64url but not valid UTF-8 does not leak a Node-internal error code", async () => {
+    const home = nextHome();
+    await main(["init", "--alias", "alice"], fakeIo(home));
+    const io = fakeIo(home);
+    // 0xff alone is not a valid UTF-8 byte sequence, but any byte string has a
+    // canonical base64url encoding, so this clears decodeCard's base64url
+    // check and fails only at the fatal TextDecoder step, the same path a
+    // Node-internal ERR_ENCODING_INVALID_ENCODED_DATA would come from.
+    const badCard = toB64u(new Uint8Array([0xff]));
+    expect(await main(["add", badCard], io)).toBe(1);
+    expect(io.stderr).toHaveLength(1);
+    expect(io.stderr[0]).toMatch(/^cc-relay: /);
+    expect(io.stderr[0]).not.toContain("ERR_");
   });
 
   test("an error that is not a known setup problem is rethrown, not turned into exit 1", async () => {
