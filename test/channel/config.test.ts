@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
   ConfigError,
@@ -155,12 +155,55 @@ describe("peers", () => {
     const { home, self } = initHome();
     const bob = generateIdentity("bob");
     const entry = { alias: "bob", signPub: toB64u(bob.signPub), boxPub: toB64u(bob.boxPub) };
-    writeFileSync(paths(home).peers, JSON.stringify({ v: 1, peers: [entry, { ...entry, alias: "bobby" }] }));
+    writeFileSync(paths(home).peers, JSON.stringify({ v: 1, peers: [entry, { ...entry, alias: "bobby" }] }), { mode: 0o600 });
     expect(codeOf(() => loadPeers(home, self))).toBe("invalid");
-    writeFileSync(paths(home).peers, JSON.stringify({ v: 1, peers: [{ ...entry, extra: 1 }] }));
+    writeFileSync(paths(home).peers, JSON.stringify({ v: 1, peers: [{ ...entry, extra: 1 }] }), { mode: 0o600 });
     expect(codeOf(() => loadPeers(home, self))).toBe("invalid");
-    writeFileSync(paths(home).peers, "not json");
+    writeFileSync(paths(home).peers, "not json", { mode: 0o600 });
     expect(codeOf(() => loadPeers(home, self))).toBe("invalid");
+  });
+
+  test("loading refuses a world-readable peers file", () => {
+    const { home, self } = initHome();
+    chmodSync(paths(home).peers, 0o644);
+    expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+  });
+
+  test("loading refuses a peers file that is a symlink, even to a private file outside the home", () => {
+    const { home, self } = initHome();
+    const outside = nextHome();
+    writeFileSync(outside, "{}", { mode: 0o600 });
+    rmSync(paths(home).peers, { force: true });
+    symlinkSync(outside, paths(home).peers);
+    expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+  });
+
+  test("loading peers refuses a loosened home directory", () => {
+    const { home, self } = initHome();
+    chmodSync(home, 0o777);
+    expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+    chmodSync(home, 0o700);
+  });
+
+  test("saving peers refuses a loosened home directory", () => {
+    const { home, self } = initHome();
+    chmodSync(home, 0o755);
+    expect(codeOf(() => savePeers(home, self, []))).toBe("permissions");
+    chmodSync(home, 0o700);
+  });
+
+  test("a successful savePeers leaves no leftover temp files in the home", () => {
+    const { home, self } = initHome();
+    const bob = generateIdentity("bob");
+    savePeers(home, self, [makePeer(bob)]);
+    const leftovers = readdirSync(home).filter((name) => name.includes(".tmp"));
+    expect(leftovers).toEqual([]);
+  });
+
+  test("hubAllow refuses a peer whose id equals the host's own", () => {
+    const self = generateIdentity("alice");
+    const selfAsPeer = makePeer({ ...self, alias: "shadow" });
+    expect(codeOf(() => hubAllow(self, [selfAsPeer]))).toBe("invalid");
   });
 
   test("peerMap and hubAllow key every entry by the id derived from its signPub; the hub list includes self", () => {
@@ -179,6 +222,20 @@ describe("peers", () => {
 
 describe("hub, link, and endpoint", () => {
   const lanHub = { v: 1 as const, mode: "lan" as const, port: 24000, path: PATH22, name: "mac.local" };
+
+  test("a missing hub or link file loads as undefined, not an error", () => {
+    const { home } = initHome();
+    expect(loadHub(home)).toBeUndefined();
+    expect(loadLink(home)).toBeUndefined();
+  });
+
+  test("loading refuses a hub file that is a symlink, even to a private file outside the home", () => {
+    const { home } = initHome();
+    const outside = nextHome();
+    writeFileSync(outside, "{}", { mode: 0o600 });
+    symlinkSync(outside, paths(home).hub);
+    expect(codeOf(() => loadHub(home))).toBe("permissions");
+  });
 
   test("hub.json round-trips; tailscale mode requires this machine's login", () => {
     const { home } = initHome();
@@ -221,6 +278,22 @@ describe("hub, link, and endpoint", () => {
       hubId: host.signPub,
       url: `ws://mac.local:24000/${PATH22}`,
     });
+  });
+
+  test("link.json round-trips with via tailscale", () => {
+    const { home } = initHome();
+    const link = { v: 1 as const, hubId: "A".repeat(43), via: "tailscale" as const, host: "100.64.0.9", port: 24000, path: PATH22 };
+    saveLink(home, link);
+    expect(loadLink(home)).toEqual(link);
+  });
+
+  test("a hand-edited link.json is validated on load", () => {
+    const { home } = initHome();
+    const base = { v: 1, hubId: "A".repeat(43), host: "mac.local", port: 24000, path: PATH22 };
+    writeFileSync(paths(home).link, JSON.stringify({ ...base, via: "wan" }), { mode: 0o600 });
+    expect(codeOf(() => loadLink(home))).toBe("invalid");
+    writeFileSync(paths(home).link, JSON.stringify({ ...base, via: "lan", extra: 1 }), { mode: 0o600 });
+    expect(codeOf(() => loadLink(home))).toBe("invalid");
   });
 
   test("the link host can't smuggle URL structure", () => {

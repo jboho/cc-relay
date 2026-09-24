@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
 import type { HubMode } from "../hub/bind.js";
 import type { AllowedPeer } from "../hub/handshake.js";
@@ -50,6 +50,8 @@ function isErrno(err: unknown, code: string): boolean {
 
 // The home holds the secret keys, so group/other access is refused rather than
 // silently repaired: a loosened mode means something outside cc-relay touched it.
+// Known limitation: this checks POSIX mode bits only; macOS ACLs (see `ls -le`)
+// can grant access beyond the mode and are not inspected.
 export function checkPrivate(path: string, what: string): void {
   let mode: number;
   try {
@@ -77,6 +79,7 @@ export function ensureHome(home: string): void {
 // Readers never see a half-written file: write a private temp file, then rename
 // over the target (atomic within one directory).
 export function writeJsonAtomic(path: string, value: unknown): void {
+  checkPrivate(dirname(path), "cc-relay home");
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
     writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
@@ -87,16 +90,20 @@ export function writeJsonAtomic(path: string, value: unknown): void {
   }
 }
 
+// A missing file is "absent", not an error: checkPrivate's own "missing" code
+// for the file (not the home, which must already exist) is what tells the two
+// apart, so a loose home is still a permissions error even when the file itself
+// hasn't been written yet.
 function readJson(path: string, what: string): unknown | undefined {
-  let text: string;
+  checkPrivate(dirname(path), "cc-relay home");
   try {
-    text = readFileSync(path, "utf8");
+    checkPrivate(path, what);
   } catch (err) {
-    if (isErrno(err, "ENOENT")) return undefined;
+    if (err instanceof ConfigError && err.code === "missing") return undefined;
     throw err;
   }
   try {
-    return JSON.parse(text);
+    return JSON.parse(readFileSync(path, "utf8"));
   } catch (err) {
     throw new ConfigError(`${what} ${path} is not valid JSON`, "invalid", { cause: err });
   }
@@ -228,6 +235,7 @@ export function peerMap(peers: readonly StoredPeer[]): Map<string, Peer> {
 
 // The host's own channel connects to its own hub too, so self is on the list.
 export function hubAllow(self: Identity, peers: readonly StoredPeer[], selfLogin?: string): Map<string, AllowedPeer> {
+  checkPeers(self, peers);
   const entries: AllowedPeer[] = [
     { id: peerId(self.signPub), signPub: self.signPub, ...(selfLogin !== undefined ? { tailscaleLogin: selfLogin } : {}) },
     ...peers.map((p) => ({
