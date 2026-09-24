@@ -12,10 +12,10 @@ export class ReplayGuard {
     private readonly maxEntries = 10_000,
   ) {
     // A NaN/zero/negative TTL silently reopens the replay window: prune()'s
-    // `expiry > now` check and checkAndRemember's `now + ttlMs` both go wrong
-    // in ways that let every entry through immediately, rather than failing
-    // loudly. Both are our own config, never caller-supplied peer data, so
-    // this must throw rather than fail open.
+    // `expiry > now` check and admit's `now + ttlMs` both go wrong in ways
+    // that let every entry through immediately, rather than failing loudly.
+    // Both are our own config, never caller-supplied peer data, so this
+    // must throw rather than fail open.
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
       throw new RangeError("ReplayGuard: ttlMs must be a finite number > 0");
     }
