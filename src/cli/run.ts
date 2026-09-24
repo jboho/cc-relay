@@ -47,7 +47,12 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
   const self = loadIdentity(home);
   const peers = loadPeers(home, self);
   const config = loadHub(home);
-  if (!config) throw new ConfigError(`no hub on this machine (${paths(home).hub} is missing): run cc-relay init --host`, "missing");
+  if (!config) {
+    throw new ConfigError(
+      `this machine was set up as a guest (${paths(home).hub} is missing): the hub runs on the host machine, not here`,
+      "missing",
+    );
+  }
   const host = resolveBindHost(config.mode, {
     ...(config.iface !== undefined ? { iface: config.iface } : {}),
     ...(deps.interfaces ? { interfaces: deps.interfaces } : {}),

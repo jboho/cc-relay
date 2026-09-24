@@ -115,10 +115,20 @@ async function session(home: string, settings: string | null = paths(home).setti
 }
 
 describe("hub command", () => {
-  test("refuses to start without a hub config", async () => {
+  test("refuses to start without a hub config, and says this machine is a guest rather than pointing at init", async () => {
     const home = nextHome();
     await init(fakeIo(home), { alias: "bob" });
-    await expect(hub(fakeIo(home))).rejects.toMatchObject({ code: "missing" });
+    let caught: unknown;
+    try {
+      await hub(fakeIo(home));
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toMatchObject({ code: "missing" });
+    const message = (caught as Error).message;
+    expect(message).toMatch(/set up as a guest/);
+    expect(message).toMatch(/hub runs on the host machine/);
+    expect(message).not.toMatch(/init --host/);
   });
 
   test("a tailscale-mode hub propagates a TailscaleError from resolveTailscale, not a stack trace", async () => {

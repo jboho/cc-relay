@@ -324,7 +324,17 @@ export function checkPeers(self: Identity, peers: readonly StoredPeer[]): void {
 export function loadPeers(home: string, self: Identity): StoredPeer[] {
   const path = paths(home).peers;
   const raw = readJson(path, "peers file");
-  if (raw === undefined) throw new ConfigError(`peers file ${path} does not exist; run cc-relay init`, "missing");
+  // Not "run cc-relay init": init refuses once identity.json exists (setup.ts's
+  // init()), so pointing here at a command that will just refuse leaves the
+  // user stuck. Recreating an empty peers file by hand and re-adding peers
+  // with `add` is the path that actually works, verified against add()'s
+  // behavior once such a file is in place.
+  if (raw === undefined) {
+    throw new ConfigError(
+      `peers file ${path} does not exist; if this machine is otherwise set up, recreate it as an empty list (write {"v":1,"peers":[]} to that path, mode 600) and re-add your peers with cc-relay add`,
+      "missing",
+    );
+  }
   const file = parseWith(PeersFile, raw, path, "peers file");
   let peers: StoredPeer[];
   try {

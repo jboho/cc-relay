@@ -287,6 +287,19 @@ describe("peers", () => {
     chmodSync(home, 0o700);
   });
 
+  test("a missing peers file (identity otherwise intact) suggests recreating it, not the init command that would refuse", () => {
+    const { home, self } = initHome();
+    rmSync(paths(home).peers);
+    let message = "";
+    try {
+      loadPeers(home, self);
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).not.toMatch(/run cc-relay init\b/);
+    expect(message).toMatch(/peers file .* does not exist/);
+  });
+
   test("saving peers refuses a loosened home directory", () => {
     const { home, self } = initHome();
     chmodSync(home, 0o755);
