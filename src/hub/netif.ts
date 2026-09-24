@@ -38,19 +38,28 @@ export function resolveBindHost(
       return host;
     }
     case "tailscale": {
-      const hits = Object.keys(interfaces).flatMap((name) =>
+      // Restricted to utun* (macOS Tailscale's tunnel interface) unless the
+      // caller names one explicitly: ISPs and mobile hotspots also hand out
+      // carrier-grade NAT addresses from 100.64.0.0/10 on physical interfaces
+      // like en0, so if Tailscale is down that address would otherwise be the
+      // single match and the hub would bind to the carrier network instead of
+      // the tailnet.
+      const names = iface !== undefined ? [iface] : Object.keys(interfaces).filter((name) => name.startsWith("utun"));
+      const hits = names.flatMap((name) =>
         ipv4On(interfaces, name).filter((ip) => {
           try {
             validateBind("tailscale", ip);
             return true;
-          } catch {
-            return false;
+          } catch (e) {
+            if (e instanceof BindError) return false;
+            throw e;
           }
         }),
       );
       if (hits.length !== 1) {
+        const hint = hits.length === 0 ? " (Tailscale may be down; pass --iface to pick an interface manually)" : "";
         throw new BindError(
-          `expected exactly one tailscale (100.64.0.0/10) address, found ${hits.length}. Candidates: ${describe(interfaces)}`,
+          `expected exactly one tailscale (100.64.0.0/10) address on a utun interface, found ${hits.length}${hint}. Candidates: ${describe(interfaces)}`,
         );
       }
       return hits[0] as string;

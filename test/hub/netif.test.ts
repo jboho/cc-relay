@@ -45,10 +45,30 @@ describe("resolveBindHost", () => {
     expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(BindError);
   });
 
-  test("tailscale picks the one 100.64/10 address on any interface", () => {
+  test("tailscale picks the one 100.64/10 address on a utun interface", () => {
     expect(resolveBindHost("tailscale", { interfaces: { ...MAC, utun4: [v4("100.101.102.103")] } })).toBe(
       "100.101.102.103",
     );
+  });
+
+  test("tailscale refuses a carrier-grade NAT address on en0 when Tailscale is down", () => {
+    expect(() => resolveBindHost("tailscale", { interfaces: { en0: [v4("100.64.5.5")] } })).toThrow(BindError);
+    expect(() => resolveBindHost("tailscale", { interfaces: { en0: [v4("100.64.5.5")] } })).toThrow(/found 0/);
+  });
+
+  test("tailscale ignores a CGNAT address on en0 and picks the utun interface", () => {
+    expect(
+      resolveBindHost("tailscale", { interfaces: { en0: [v4("100.64.5.5")], utun4: [v4("100.101.102.103")] } }),
+    ).toBe("100.101.102.103");
+  });
+
+  test("tailscale honours an explicit --iface even when it isn't named utun*", () => {
+    expect(
+      resolveBindHost("tailscale", {
+        iface: "en0",
+        interfaces: { en0: [v4("100.64.5.5")], utun4: [v4("100.101.102.103")] },
+      }),
+    ).toBe("100.64.5.5");
   });
 
   test("tailscale ignores 100.x addresses outside 100.64/10", () => {
