@@ -43,7 +43,11 @@ export function resolveBindHost(
         validateBind("lan", host);
       } catch (e) {
         if (!(e instanceof BindError)) throw e;
-        throw new BindError(`${e.message}; pass --iface. Candidates: ${describe(interfaces)}`);
+        // An explicit --iface already names the interface to use, so there's
+        // nothing more to tell the caller to pass --iface for; only the
+        // default-interface path gets that hint, as the tailscale branch below does.
+        const hint = iface === undefined ? "; pass --iface" : "";
+        throw new BindError(`${e.message}${hint}. Candidates: ${describe(interfaces)}`);
       }
       return host;
     }

@@ -50,6 +50,19 @@ describe("resolveBindHost", () => {
     expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(/--iface/);
   });
 
+  test("lan refusing a public address on an explicit --iface doesn't suggest --iface again", () => {
+    const interfaces: Interfaces = { en0: [v4("203.0.113.9")] };
+    expect(() => resolveBindHost("lan", { iface: "en0", interfaces })).toThrow(/en0=203\.0\.113\.9/);
+    let message = "";
+    try {
+      resolveBindHost("lan", { iface: "en0", interfaces });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).not.toMatch(/--iface/);
+    expect(message).toContain("Candidates:");
+  });
+
   test("rejects an empty-string iface with a clear message, in both modes", () => {
     expect(() => resolveBindHost("lan", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
     expect(() => resolveBindHost("tailscale", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
