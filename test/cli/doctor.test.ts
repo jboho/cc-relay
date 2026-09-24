@@ -8,7 +8,7 @@ import { doctor, type DoctorDeps, GRANT_PROBE_PORTS, runChecks } from "../../src
 import { canConnect, parseSntp, probeHub } from "../../src/cli/probe.js";
 import { channel, hub } from "../../src/cli/run.js";
 import { add, card, init } from "../../src/cli/setup.js";
-import { loadHub, loadIdentity, loadLink, paths, saveLink } from "../../src/channel/config.js";
+import { loadHub, loadIdentity, loadLink, paths, saveHub, saveLink } from "../../src/channel/config.js";
 import type { ProcLookup } from "../../src/channel/launch.js";
 import { decodeCard, fingerprint } from "../../src/protocol/card.js";
 import { generateIdentity } from "../../src/protocol/identity.js";
@@ -146,6 +146,23 @@ describe("doctor", () => {
       detail: expect.stringContaining("firewall"),
     });
     const detail = (await byName(hostHome, healthy({ probe: async () => "timeout" }))).hub?.detail;
+    expect(detail).not.toMatch(/client isolation/);
+  });
+
+  test("a lan-mode host's own timeout doesn't mention Wi-Fi client isolation either", async () => {
+    // The host has no link.json at all (hub and link are mutually exclusive),
+    // so the isolation hint must not ride in on the hub's own mode either --
+    // a lan-mode host timing out on itself isn't a Wi-Fi client-isolation
+    // problem, since it never left the machine over Wi-Fi to begin with.
+    const { hostHome } = await pair();
+    const existing = loadHub(hostHome);
+    if (!existing) throw new Error("expected a hub config");
+    saveHub(hostHome, { ...existing, mode: "lan" });
+    const interfaces = {
+      en0: [{ address: "192.168.1.25", netmask: "255.255.255.0", family: "IPv4" as const, mac: "00:00:00:00:00:00", internal: false, cidr: null }],
+    };
+    const detail = (await byName(hostHome, healthy({ probe: async () => "timeout", interfaces }))).hub?.detail;
+    expect(detail).toContain("firewall");
     expect(detail).not.toMatch(/client isolation/);
   });
 

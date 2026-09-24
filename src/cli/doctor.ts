@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { type HubMode } from "../hub/bind.js";
 import { type Interfaces, resolveBindHost } from "../hub/netif.js";
 import { resolveTailscale, type ResolvedTailscale } from "../hub/tailscale.js";
 import {
@@ -56,8 +57,12 @@ const PROBE_DETAIL: Record<Exclude<ProbeOutcome, "ok" | "unreachable" | "timeout
 
 // Wi-Fi client isolation only applies to a lan link; a tailscale or loopback
 // link's timeout has nothing to do with the Wi-Fi network, so mentioning it
-// there would send the operator checking the wrong thing.
-function timeoutDetail(via: string | undefined): string {
+// there would send the operator checking the wrong thing. A host probing its
+// own hub has no link at all (hub and link are mutually exclusive), so it
+// falls to the no-hint branch regardless of the hub's own mode -- a lan-mode
+// host isn't reaching itself over Wi-Fi client isolation, so the hint would
+// send it looking in the wrong place too.
+function timeoutDetail(via: LinkConfig["via"] | HubMode | undefined): string {
   return via === "lan"
     ? "no answer: check the Wi-Fi allows device-to-device traffic (client isolation), the host's firewall, and that the host is awake"
     : "no answer: check the host's firewall, and that the host is awake";
@@ -184,7 +189,7 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
     // changes without this regex being revisited.
     const hostPort = /^wss?:\/\/([^/]+)\//.exec(endpoint.url)?.[1] ?? endpoint.url;
     add("FAIL", "hub", `could not reach ${hostPort} (network error): check Tailscale/LAN connectivity and the macOS Local Network permission`);
-  } else if (outcome === "timeout") add("FAIL", "hub", timeoutDetail(link?.via ?? hub?.mode));
+  } else if (outcome === "timeout") add("FAIL", "hub", timeoutDetail(link?.via));
   else add("FAIL", "hub", PROBE_DETAIL[outcome]);
 
   if (link?.via === "tailscale") {
