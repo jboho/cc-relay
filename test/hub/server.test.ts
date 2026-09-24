@@ -477,7 +477,12 @@ describe("hub: fail-closed handler throws and teardown", () => {
       ]);
       expect(code).toBe(1006);
       expect(p.raw).toEqual([]);
-      expect(await surfaced).toBeInstanceOf(RangeError);
+      // Bounded so the finally below always runs before the test timeout.
+      const thrown = await Promise.race([
+        surfaced,
+        new Promise<string>((r) => setTimeout(() => r("not surfaced"), 1000)),
+      ]);
+      expect(thrown).toBeInstanceOf(RangeError);
     } finally {
       process.removeAllListeners("unhandledRejection");
       for (const l of saved) process.on("unhandledRejection", l as never);
@@ -488,6 +493,7 @@ describe("hub: fail-closed handler throws and teardown", () => {
     const timeouts = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
     const before = timeouts();
     const h = await startTestHub(host, []);
+    hubs.push(h);
     expect(timeouts()).toBe(before + 1);
     await h.close();
     expect(timeouts()).toBe(before);
