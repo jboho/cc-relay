@@ -312,13 +312,14 @@ describe("channel command", () => {
       // so the hub now sees bob as offline instead of still routing to it.
       // Each attempt can take as long as the client's 10s ack timeout if the
       // hub hasn't yet noticed bob's socket closed, so retryUntil needs more
-      // than its 3s default and this test needs more than vitest's 5s default
-      // -- otherwise vitest kills the test first and reports its own generic
-      // timeout instead of retryUntil's real "timed out" message.
+      // than its 3s default -- but its budget plus one more in-flight 10s
+      // attempt must still fit under this test's 20_000 timeout (8 + 10 +
+      // margin < 20), or vitest kills the test first and reports its own
+      // generic timeout instead of retryUntil's real "timed out" message.
       const result = await retryUntil(
         () => alice.call("send", { to: "bob", text: "are you still there?" }),
         (text) => text.startsWith("offline: "),
-        15_000,
+        8_000,
       );
       expect(result).toMatch(/^offline: bob has no relay session connected$/);
     },

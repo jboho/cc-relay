@@ -72,11 +72,17 @@ function startHub(home: string): Promise<Hub> {
   // reads it, or the hub can block writing to a full pipe; keeping it around
   // also means a startup failure's diagnostics aren't silently dropped.
   proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
-  proc.stopped = new Promise((resolve) => proc.once("exit", (code) => resolve({ code, stdout: out })));
+  // "close" (not "exit") so stdout/stderr have finished draining before
+  // stopped resolves -- "exit" only means the process is gone, not that its
+  // pipes have delivered their last chunk.
+  proc.stopped = new Promise((resolve) => proc.once("close", (code) => resolve({ code, stdout: out })));
   cleanup.push(
     () =>
       new Promise<void>((done) => {
-        if (proc.exitCode !== null) return done();
+        // A hub killed by a signal has exitCode null and signalCode set; that
+        // case must also short-circuit, or this waits on an "exit" that
+        // already fired and hangs until the hook timeout.
+        if (proc.exitCode !== null || proc.signalCode !== null) return done();
         proc.once("exit", () => done());
         proc.kill("SIGTERM");
       }),
@@ -88,7 +94,7 @@ function startHub(home: string): Promise<Hub> {
       // in: "listening" can straddle two chunks under a small pipe buffer.
       if (out.includes("listening")) ready(proc);
     });
-    proc.once("exit", (code) => fail(new Error(`hub exited ${code} before it started listening\nstderr:\n${err}`)));
+    proc.once("close", (code) => fail(new Error(`hub exited ${code} before it started listening\nstderr:\n${err}`)));
   });
 }
 
@@ -198,10 +204,8 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
 
   test("stopping the hub with SIGTERM makes it exit 0 and announce it on stdout", async () => {
     const hubProc = await startHub(hostHome);
-    // src/cli/run.ts's hub() now calls io.until() (which registers the
-    // SIGINT/SIGTERM handler synchronously) before printing the "listening"
-    // line, so a SIGTERM sent the instant "listening" is observed can no
-    // longer race the handler -- no delay needed here.
+    // hub() registers the stop handler before printing "listening", so a
+    // signal sent on seeing it is handled.
     hubProc.kill("SIGTERM");
     const { code, stdout } = await hubProc.stopped;
     expect(code).toBe(0);
