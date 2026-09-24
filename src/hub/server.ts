@@ -76,7 +76,12 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
   // with the same bare 404 as everything else instead. This socket already
   // has the error listener attached below (it's added before handleUpgrade
   // is ever called), so an RST here can't crash the process either.
-  wss.on("wsClientError", (_err, socket) => socket.end(RAW_404));
+  // Node's http sockets have allowHalfOpen set, so end() alone only sends our
+  // FIN; the socket (and its 'close', which is what releases the pending
+  // slot below) stays open until the peer sends its own — a peer that never
+  // does holds the slot forever. Destroy once the response is flushed, the
+  // same way ws's own abortHandshake does.
+  wss.on("wsClientError", (_err, socket) => socket.end(RAW_404, () => socket.destroy()));
 
   http.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     // Node removes its own listener for the raw socket's 'error' event before
@@ -89,7 +94,10 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     socket.on("error", () => socket.destroy());
 
     if (req.url !== expectedUrl) {
-      socket.end(RAW_404);
+      // Same half-open hazard as the wsClientError branch above: without the
+      // destroy, a peer that never sends its own FIN leaks the fd (no pending
+      // slot was taken yet on this branch, but the socket itself never closes).
+      socket.end(RAW_404, () => socket.destroy());
       return;
     }
     // Over the cap, drop before the upgrade so the client never sees an open.
