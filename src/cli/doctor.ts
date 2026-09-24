@@ -47,13 +47,21 @@ export const CLOCK_FAIL_S = 60;
 export const GRANT_PROBE_PORTS = [22, 445, 548, 3283, 5900, 8080] as const;
 const GRANT_PROBE_TIMEOUT_MS = 1500;
 
-const PROBE_DETAIL: Record<Exclude<ProbeOutcome, "ok" | "unreachable">, string> = {
+const PROBE_DETAIL: Record<Exclude<ProbeOutcome, "ok" | "unreachable" | "timeout">, string> = {
   refused: "connection refused: is cc-relay hub running on the host?",
-  timeout: "no answer: check the Wi-Fi allows device-to-device traffic (client isolation), the host's firewall, and that the host is awake",
   unresolved: "the hub's host name doesn't resolve on this network",
   notfound: "the hub answered 404: the path is wrong, so re-add the host's current card",
-  rejected: "the hub closed the connection: this machine isn't on its allowlist, the clocks differ by over 60 s, or the Tailscale login doesn't match",
+  rejected: "the hub closed the connection: this machine isn't on its allowlist, the clocks differ by over 60 s, the host hasn't restarted cc-relay hub since adding you, or the Tailscale login doesn't match",
 };
+
+// Wi-Fi client isolation only applies to a lan link; a tailscale or loopback
+// link's timeout has nothing to do with the Wi-Fi network, so mentioning it
+// there would send the operator checking the wrong thing.
+function timeoutDetail(via: string | undefined): string {
+  return via === "lan"
+    ? "no answer: check the Wi-Fi allows device-to-device traffic (client isolation), the host's firewall, and that the host is awake"
+    : "no answer: check the host's firewall, and that the host is awake";
+}
 
 const errMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -176,7 +184,8 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
     // changes without this regex being revisited.
     const hostPort = /^wss?:\/\/([^/]+)\//.exec(endpoint.url)?.[1] ?? endpoint.url;
     add("FAIL", "hub", `could not reach ${hostPort} (network error): check Tailscale/LAN connectivity and the macOS Local Network permission`);
-  } else add("FAIL", "hub", PROBE_DETAIL[outcome]);
+  } else if (outcome === "timeout") add("FAIL", "hub", timeoutDetail(link?.via ?? hub?.mode));
+  else add("FAIL", "hub", PROBE_DETAIL[outcome]);
 
   if (link?.via === "tailscale") {
     // canConnect returns false both for "closed" and for "never got there", so an

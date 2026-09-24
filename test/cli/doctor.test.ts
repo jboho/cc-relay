@@ -132,6 +132,21 @@ describe("doctor", () => {
     expect(unreachable).toMatchObject({ status: "FAIL" });
     expect(unreachable?.detail).not.toMatch(/allowlist/i);
     expect(unreachable?.detail).not.toMatch(/clock/i);
+
+    expect((await byName(stopped.guestHome, healthy({ probe: async () => "rejected" }))).hub).toMatchObject({
+      status: "FAIL",
+      detail: expect.stringContaining("hasn't restarted cc-relay hub"),
+    });
+  });
+
+  test("a loopback-mode host's own timeout doesn't mention Wi-Fi client isolation", async () => {
+    const { hostHome } = await pair();
+    expect((await byName(hostHome, healthy({ probe: async () => "timeout" }))).hub).toMatchObject({
+      status: "FAIL",
+      detail: expect.stringContaining("firewall"),
+    });
+    const detail = (await byName(hostHome, healthy({ probe: async () => "timeout" }))).hub?.detail;
+    expect(detail).not.toMatch(/client isolation/);
   });
 
   test("the host probes its own hub", async () => {
@@ -248,6 +263,13 @@ describe("doctor", () => {
       );
       expect(checks.grant).toMatchObject({ status: "SKIP", detail: expect.stringContaining("could not reach") });
       expect(tried).toEqual([]);
+    });
+
+    test("a timeout over tailscale mentions the firewall but not Wi-Fi client isolation", async () => {
+      const home = await tailscaleGuest();
+      const checks = await byName(home, healthy({ ...ok, probe: async () => "timeout" as const, connectable: async () => false }));
+      expect(checks.hub).toMatchObject({ status: "FAIL", detail: expect.stringContaining("firewall") });
+      expect(checks.hub?.detail).not.toMatch(/client isolation/);
     });
 
     test("excludes the hub's own port from the grant probe", async () => {
