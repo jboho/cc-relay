@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import nacl from "tweetnacl";
 import { describe, expect, test } from "vitest";
 import { add, card, init, list, remove } from "../../src/cli/setup.js";
 import { UsageError } from "../../src/cli/io.js";
@@ -125,6 +126,13 @@ describe("init", () => {
     await expect(init(fakeIo(home), { alias: "alice", host: true, mode: "loopback", tailscaleLogin: "a b" })).rejects.toBeInstanceOf(ConfigError);
     for (const f of [p.identity, p.peers, p.settings, p.mcp, p.hub]) expect(existsSync(f)).toBe(false);
   });
+
+  test("refuses a reserved alias for this machine", async () => {
+    const home = nextHome();
+    const p = paths(home);
+    await expect(init(fakeIo(home), { alias: "user" })).rejects.toThrow(/reserved/);
+    for (const f of [p.identity, p.peers, p.settings, p.mcp, p.hub]) expect(existsSync(f)).toBe(false);
+  });
 });
 
 describe("card", () => {
@@ -191,6 +199,19 @@ describe("add", () => {
     expect(add(fakeIo(host.home), { card: c.text, confirm: c.fp })).toBe(0);
     expect(loadPeers(host.home, loadIdentity(host.home)).map((p) => p.alias)).toEqual(["bob"]);
     expect(loadLink(host.home)).toBeUndefined();
+  });
+
+  test("refuses a card whose alias is reserved", async () => {
+    const guest = await fresh("bob");
+    // Built from raw keys rather than generateIdentity, since generateIdentity
+    // itself now refuses a reserved alias -- this proves add() enforces it too,
+    // for a peer's card, independently of the identity-creation path.
+    const sign = nacl.sign.keyPair();
+    const box = nacl.box.keyPair();
+    const badCard = encodeCard({ alias: "user", signPub: sign.publicKey, boxPub: box.publicKey });
+    const fp = fingerprint(sign.publicKey, box.publicKey);
+    expect(() => add(fakeIo(guest.home), { card: badCard, confirm: fp })).toThrow(/reserved/);
+    expect(loadPeers(guest.home, loadIdentity(guest.home))).toEqual([]);
   });
 
   test("a host refuses another hub's card", async () => {

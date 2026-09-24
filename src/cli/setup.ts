@@ -3,8 +3,8 @@ import { hostname } from "node:os";
 import { type HubMode } from "../hub/bind.js";
 import { resolveBindHost } from "../hub/netif.js";
 import { generatePath, pickPort } from "../hub/port.js";
-import { cardFor, decodeCard, encodeCard, fingerprint } from "../protocol/card.js";
-import { generateIdentity } from "../protocol/identity.js";
+import { CardError, cardFor, decodeCard, encodeCard, fingerprint } from "../protocol/card.js";
+import { generateIdentity, isReservedAlias } from "../protocol/identity.js";
 import {
   ConfigError,
   ensureHome,
@@ -145,6 +145,9 @@ export interface AddOptions {
 export function add(io: Io, opts: AddOptions): number {
   const home = relayHome(io.env);
   const peerCard = decodeCard(opts.card);
+  if (isReservedAlias(peerCard.alias)) {
+    throw new CardError(`the card's alias "${peerCard.alias}" is reserved; ask them to pick another alias and send a new card`);
+  }
   const fp = fingerprint(peerCard.signPub, peerCard.boxPub);
   if (opts.confirm === undefined) {
     io.err(`card for ${peerCard.alias}, fingerprint ${fp}`);

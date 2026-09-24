@@ -8,6 +8,18 @@ export class IdentityError extends Error {
 
 export const ALIAS_RE = /^[a-z0-9_-]{1,32}$/;
 
+// A peer's alias is shown to the model as the channel tag's from=; one of
+// these would let a peer masquerade as the user or the assistant itself, so
+// they're refused when an identity or peer is created. Not folded into
+// ALIAS_RE: that regex also gates IdentityFile/StoredPeerSchema/CardSchema,
+// which validate files and cards that may already exist on disk, and this
+// check must not make an existing identity.json or peers.json unloadable.
+const RESERVED_ALIASES = new Set(["user", "system", "assistant", "claude", "anthropic", "human", "cc-relay"]);
+
+export function isReservedAlias(alias: string): boolean {
+  return RESERVED_ALIASES.has(alias.toLowerCase());
+}
+
 export interface Identity {
   alias: string;
   signPub: Uint8Array;
@@ -18,6 +30,7 @@ export interface Identity {
 
 export function generateIdentity(alias: string): Identity {
   if (!ALIAS_RE.test(alias)) throw new IdentityError(`invalid alias: ${JSON.stringify(alias)}`);
+  if (isReservedAlias(alias)) throw new IdentityError(`"${alias}" is a reserved alias; pick another one`);
   const sign = nacl.sign.keyPair();
   const box = nacl.box.keyPair();
   return {

@@ -24,6 +24,12 @@ describe("identity", () => {
     }
   });
 
+  test("rejects reserved aliases, case-insensitively", () => {
+    for (const alias of ["user", "System", "ASSISTANT", "claude", "Anthropic", "human", "cc-relay"]) {
+      expect(() => generateIdentity(alias)).toThrow(IdentityError);
+    }
+  });
+
   test("round-trips through serialize/parse", () => {
     const id = generateIdentity("alice");
     expect(parseIdentity(serializeIdentity(id))).toEqual(id);
