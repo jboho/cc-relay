@@ -45,6 +45,16 @@ describe("resolveBindHost", () => {
     expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(BindError);
   });
 
+  test("lan refusing a public address lists the candidates and the --iface hint", () => {
+    expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(/en0=203\.0\.113\.9/);
+    expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(/--iface/);
+  });
+
+  test("rejects an empty-string iface", () => {
+    expect(() => resolveBindHost("lan", { iface: "", interfaces: MAC })).toThrow(BindError);
+    expect(() => resolveBindHost("tailscale", { iface: "", interfaces: MAC })).toThrow(BindError);
+  });
+
   test("tailscale picks the one 100.64/10 address on a utun interface", () => {
     expect(resolveBindHost("tailscale", { interfaces: { ...MAC, utun4: [v4("100.101.102.103")] } })).toBe(
       "100.101.102.103",
@@ -69,6 +79,20 @@ describe("resolveBindHost", () => {
         interfaces: { en0: [v4("100.64.5.5")], utun4: [v4("100.101.102.103")] },
       }),
     ).toBe("100.64.5.5");
+  });
+
+  test("tailscale with an explicit --iface that has no match doesn't mention utun or --iface", () => {
+    expect(() => resolveBindHost("tailscale", { iface: "en7", interfaces: MAC })).toThrow(BindError);
+    let message = "";
+    try {
+      resolveBindHost("tailscale", { iface: "en7", interfaces: MAC });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).not.toMatch(/utun/);
+    expect(message).not.toMatch(/--iface/);
+    expect(message).toContain("en7");
+    expect(message).toMatch(/found 0/);
   });
 
   test("tailscale ignores 100.x addresses outside 100.64/10", () => {

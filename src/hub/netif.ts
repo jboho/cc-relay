@@ -34,7 +34,12 @@ export function resolveBindHost(
         );
       }
       const host = addrs[0] as string;
-      validateBind("lan", host);
+      try {
+        validateBind("lan", host);
+      } catch (e) {
+        if (!(e instanceof BindError)) throw e;
+        throw new BindError(`${e.message}; pass --iface. Candidates: ${describe(interfaces)}`);
+      }
       return host;
     }
     case "tailscale": {
@@ -44,6 +49,11 @@ export function resolveBindHost(
       // like en0, so if Tailscale is down that address would otherwise be the
       // single match and the hub would bind to the carrier network instead of
       // the tailnet.
+      // utun isn't unique to Tailscale, either: Cloudflare WARP also assigns
+      // itself a CGNAT address (100.96.0.0/12, inside the 100.64.0.0/10 range
+      // checked below) on a utun interface, so if Tailscale is down and WARP
+      // is up, WARP's address could become the single "match" here instead.
+      // This utun* filter is macOS-only; Linux Tailscale uses tailscale0.
       const names = iface !== undefined ? [iface] : Object.keys(interfaces).filter((name) => name.startsWith("utun"));
       const hits = names.flatMap((name) =>
         ipv4On(interfaces, name).filter((ip) => {
@@ -57,9 +67,14 @@ export function resolveBindHost(
         }),
       );
       if (hits.length !== 1) {
-        const hint = hits.length === 0 ? " (Tailscale may be down; pass --iface to pick an interface manually)" : "";
+        // An explicit --iface already names the interface to use, so a
+        // mismatch here isn't "Tailscale may be down" (the utun* search
+        // wasn't even used) and there's nothing more to tell the caller to
+        // pass --iface for; only the auto-detect path gets that hint.
+        const where = iface !== undefined ? `on interface ${iface}` : "on a utun interface";
+        const hint = iface === undefined && hits.length === 0 ? " (Tailscale may be down; pass --iface to pick an interface manually)" : "";
         throw new BindError(
-          `expected exactly one tailscale (100.64.0.0/10) address on a utun interface, found ${hits.length}${hint}. Candidates: ${describe(interfaces)}`,
+          `expected exactly one tailscale (100.64.0.0/10) address ${where}, found ${hits.length}${hint}. Candidates: ${describe(interfaces)}`,
         );
       }
       return hits[0] as string;
