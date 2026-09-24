@@ -141,9 +141,13 @@ export class HubClient {
     // Each connect() call closes over its own `ws`. A reconnect, a superseding
     // session, or a frame already in flight can all cause this socket to keep
     // firing events after the client has moved on to a newer one, so every
-    // handler below checks this.ws === ws before touching any shared state.
+    // handler below that can fire after "open" checks this.ws === ws before
+    // touching any shared state.
     ws.on("open", () => {
-      if (this.ws !== ws) return;
+      // No this.ws === ws guard: connect() is only ever called again from
+      // within a ws's own "close" handler (start() runs once), and "open", if
+      // it fires at all, always fires before "close" - so this.ws still
+      // points at this ws every time this handler runs.
       // Doubles as the handshake timer: a hub that pings without ever
       // finishing the handshake must not keep re-arming this below.
       this.armKeepalive(ws);
