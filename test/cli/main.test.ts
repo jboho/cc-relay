@@ -2,9 +2,11 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import nacl from "tweetnacl";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
 import { loadHub, loadIdentity, paths } from "../../src/channel/config.js";
+import { encodeCard, fingerprint } from "../../src/protocol/card.js";
 import { toB64u } from "../../src/protocol/encoding.js";
 import { resolveTailscale, TailscaleError } from "../../src/hub/tailscale.js";
 import { tempHomes } from "../channel/helpers.js";
@@ -132,6 +134,19 @@ describe("main", () => {
     const io = fakeIo(home);
     expect(await main(["add", "not-a-card"], io)).toBe(1);
     expect(io.stderr[0]).toMatch(/^cc-relay: /);
+  });
+
+  test("a card with a reserved alias is refused through the full main() dispatch, not just add() directly", async () => {
+    const home = nextHome();
+    await main(["init", "--alias", "bob"], fakeIo(home));
+    const io = fakeIo(home);
+    const sign = nacl.sign.keyPair();
+    const box = nacl.box.keyPair();
+    const badCard = encodeCard({ alias: "user", signPub: sign.publicKey, boxPub: box.publicKey });
+    const fp = fingerprint(sign.publicKey, box.publicKey);
+    expect(await main(["add", badCard, "--confirm", fp], io)).toBe(1);
+    expect(io.stderr[0]).toMatch(/^cc-relay: /);
+    expect(io.stderr[0]).toMatch(/reserved/);
   });
 
   test("hub reports a port already in use as a setup error, not a stack trace", async () => {
