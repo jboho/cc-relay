@@ -51,7 +51,13 @@ function positional(args: string[], name: string): string {
   return args[0];
 }
 
+const COMMANDS = ["init", "add", "remove", "card", "list", "hub", "channel", "doctor"] as const;
+
 async function dispatch(command: string, rest: string[], io: Io): Promise<number> {
+  // Checked first so `cc-relay frobnicate --help` is an unknown-command usage
+  // error, not usage-and-exit-0: the --help short-circuit below would
+  // otherwise trigger for any command, known or not.
+  if (!(COMMANDS as readonly string[]).includes(command)) throw new UsageError(`unknown command: ${command}`);
   // Checked before parseArgs/manual argument checks, since none of the
   // subcommands define --help/-h themselves: parseArgs's strict mode would
   // otherwise reject it as an unknown option, and the no-arguments commands

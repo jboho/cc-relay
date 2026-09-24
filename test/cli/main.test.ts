@@ -80,6 +80,7 @@ describe("main", () => {
     [["remove"], "expected exactly one alias"],
     [["list", "extra"], "list takes no arguments"],
     [["channel", "extra"], "channel takes no arguments"],
+    [["frobnicate", "--help"], "unknown command: frobnicate"],
   ])("%j is a usage error", async (argv, message) => {
     const io = fakeIo(nextHome());
     expect(await main(argv, io)).toBe(EX_USAGE);
