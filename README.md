@@ -71,6 +71,8 @@ cc-relay add '<their card>' --confirm bf80-9006-2e24-8a83-48b3
 
 Both sides must add each other: the host adds the guest (this puts the guest on the hub's allowlist), and the guest adds the host (this links the guest to the hub). Dashes, spaces and letter case in `--confirm` don't matter.
 
+Run without `--confirm`, `add` only prints the fingerprint to check and exits 2, without adding anything; a script that calls `add` should treat 2 as "needs a human to confirm a fingerprint", distinct from 0 (added) or 1 (a real failure, such as a mismatched fingerprint).
+
 - A host card carries the one address its hub listens on. If a card ever offers both a LAN and a Tailscale address, `add` asks you to pick with `--via lan` or `--via tailscale`.
 - In Tailscale mode the host also records each guest's Tailscale login: `cc-relay add '<card>' --confirm <fp> --tailscale-login bob@example.com`. The hub only accepts a guest whose connection comes from that login.
 - `cc-relay list` shows your identity, your hub or link, and your peers. `cc-relay remove <alias>` removes a peer (and the link, if it was your host).

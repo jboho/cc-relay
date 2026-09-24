@@ -18,7 +18,8 @@ export const USAGE = `usage: cc-relay <command>
                                            set up this machine as the hub host
   card                                     print your card to send to a peer
   add <card> [--confirm <fingerprint>] [--via lan|tailscale] [--tailscale-login <login>]
-                                           add a peer (a host's card also links you to its hub)
+                                           add a peer (a host's card also links you to its hub);
+                                           without --confirm, prints the fingerprint to check and exits 2
   remove <alias>                           remove a peer
   list                                     show you, your hub and your peers
   hub                                      run the hub (host only; Ctrl-C stops it)

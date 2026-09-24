@@ -155,7 +155,7 @@ export function add(io: Io, opts: AddOptions): number {
     return 2;
   }
   if (normalizeFp(opts.confirm) !== normalizeFp(fp)) {
-    io.err(`fingerprint mismatch: the card says ${fp}, you confirmed ${opts.confirm}. Nothing was added.`);
+    io.err(`cc-relay: fingerprint mismatch: the card says ${fp}, you confirmed ${opts.confirm}. Nothing was added.`);
     return 1;
   }
   const self = loadIdentity(home);

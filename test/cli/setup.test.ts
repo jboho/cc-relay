@@ -170,6 +170,7 @@ describe("add", () => {
     const io = fakeIo(guest.home);
     expect(add(io, { card: cardOf(host.home).text, confirm: "0000 0000" })).toBe(1);
     expect(io.stderr.join("\n")).toContain("mismatch");
+    expect(io.stderr[0]).toMatch(/^cc-relay: /);
     expect(loadPeers(guest.home, loadIdentity(guest.home))).toEqual([]);
     expect(loadLink(guest.home)).toBeUndefined();
   });
@@ -379,6 +380,7 @@ describe("remove and list", () => {
     const io = fakeIo(home);
     expect(remove(io, "nobody")).toBe(1);
     expect(io.stderr[0]).toContain("nobody");
+    expect(io.stderr[0]).toMatch(/^cc-relay: /);
   });
 
   test("list shows you, your role and each peer's fingerprint", async () => {
