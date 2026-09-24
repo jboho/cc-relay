@@ -4,13 +4,17 @@
 // The model reads this text through its own tokenizer, not a strict parser,
 // so a disguised tag still reads as "<channel" to it even when a literal
 // string match would miss it: invisible Unicode format characters (\p{Cf} —
-// zero-width space, word joiner, soft hyphen, etc.) inserted between any
-// characters, and fullwidth/small-form "<" (＜ U+FF1C, ﹤ U+FE64) standing in
-// for the opening bracket. This does not catch lookalike letters borrowed
-// from other scripts (e.g. Cyrillic "с" for "c") — a known limit.
-const GAP = "[\\s\\p{Cf}]*";
-const WORD = [..."channe"].map((c) => `${c}\\p{Cf}*`).join("") + "l";
-const TAG_RE = new RegExp(`[<\\uFF1C\\uFE64](${GAP}\\/?${GAP}${WORD})`, "giu");
+// zero-width space, word joiner, soft hyphen, etc.) and combining marks
+// (\p{M} — combining accents, variation selectors) inserted between any
+// characters, and bracket lookalikes standing in for the opening "<":
+// fullwidth/small-form ＜ U+FF1C, ﹤ U+FE64, single/double angle quotation
+// marks ‹ U+2039, and the CJK/mathematical angle brackets 〈 U+3008,
+// 〈 U+2329, ⟨ U+27E8. This does not catch lookalike letters borrowed from
+// other scripts (e.g. Cyrillic "с" for "c") — a known limit.
+const GAP = "[\\s\\p{Cf}\\p{M}]*";
+const WORD = [..."channe"].map((c) => `${c}[\\p{Cf}\\p{M}]*`).join("") + "l";
+const OPEN = "[<\\uFF1C\\uFE64\\u2039\\u3008\\u2329\\u27E8]";
+const TAG_RE = new RegExp(`${OPEN}(${GAP}\\/?${GAP}${WORD})`, "giu");
 
 export function escapeChannelTags(text: string): string {
   return text.replace(TAG_RE, "&lt;$1");
