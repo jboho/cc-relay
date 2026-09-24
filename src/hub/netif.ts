@@ -22,11 +22,11 @@ export function resolveBindHost(
   mode: HubMode,
   { iface, interfaces = networkInterfaces() }: { iface?: string; interfaces?: Interfaces } = {},
 ): string {
-  // An empty string is falsy-adjacent enough (`iface ?? DEFAULT_LAN_IFACE`
-  // doesn't catch it, since "" isn't null/undefined) that it would otherwise
-  // fall through to "interface  has 0 IPv4 addresses", which reads like a
-  // typo in the error rather than a bad flag.
-  if (iface === "") throw new BindError("--iface must not be empty");
+  // An empty or whitespace-only string is falsy-adjacent enough
+  // (`iface ?? DEFAULT_LAN_IFACE` doesn't catch it, since neither is
+  // null/undefined) that it would otherwise fall through to "interface  has 0
+  // IPv4 addresses", which reads like a typo in the error rather than a bad flag.
+  if (iface !== undefined && iface.trim() === "") throw new BindError("--iface must not be empty");
   switch (mode) {
     case "loopback":
       return "127.0.0.1";

@@ -63,9 +63,11 @@ describe("resolveBindHost", () => {
     expect(message).toContain("Candidates:");
   });
 
-  test("rejects an empty-string iface with a clear message, in both modes", () => {
+  test("rejects an empty or whitespace-only iface with a clear message, in both modes", () => {
     expect(() => resolveBindHost("lan", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
     expect(() => resolveBindHost("tailscale", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
+    expect(() => resolveBindHost("lan", { iface: "   ", interfaces: MAC })).toThrow(/--iface must not be empty/);
+    expect(() => resolveBindHost("tailscale", { iface: "   ", interfaces: MAC })).toThrow(/--iface must not be empty/);
   });
 
   test("tailscale picks the one 100.64/10 address on a utun interface", () => {
