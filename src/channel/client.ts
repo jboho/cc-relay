@@ -23,12 +23,17 @@ export function authFor(self: Identity, hubId: Uint8Array, challenge: string): A
 // of how many attempts have accumulated.
 const MAX_BACKOFF_EXPONENT = 30;
 
+// A min of 0 (or a very small one) would otherwise let base collapse to 0 and
+// the reconnect loop spin with no delay at all; every caller gets at least
+// this much space between attempts regardless of its configured min.
+export const MIN_BACKOFF_MS = 50;
+
 // Doubles per failed attempt up to max. Jitter in the upper half keeps two
 // relays that lost the hub at the same moment from reconnecting in lockstep.
 export function backoffDelay(attempt: number, min: number, max: number, random: number): number {
   const exponent = Math.min(Math.max(attempt, 0), MAX_BACKOFF_EXPONENT);
   const base = Math.min(max, min * 2 ** exponent);
-  return base / 2 + random * (base / 2);
+  return Math.max(MIN_BACKOFF_MS, base / 2 + random * (base / 2));
 }
 
 export type HubState = "connecting" | "ready" | "superseded" | "closed";

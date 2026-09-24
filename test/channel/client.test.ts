@@ -1,7 +1,7 @@
 import nacl from "tweetnacl";
 import { type WebSocket, WebSocketServer } from "ws";
 import { afterEach, describe, expect, test } from "vitest";
-import { backoffDelay, HubClient, type HubClientOptions } from "../../src/channel/client.js";
+import { backoffDelay, HubClient, type HubClientOptions, MIN_BACKOFF_MS } from "../../src/channel/client.js";
 import { toB64u } from "../../src/protocol/encoding.js";
 import { generateIdentity, type Identity, peerId } from "../../src/protocol/identity.js";
 import type { InboundFrame } from "../../src/protocol/receive.js";
@@ -99,8 +99,12 @@ describe("backoffDelay", () => {
   });
 
   test("clamps to a finite delay when min is 0, even after many attempts", () => {
-    expect(backoffDelay(2000, 0, 30_000, 1)).toBe(0);
+    expect(backoffDelay(2000, 0, 30_000, 1)).toBe(MIN_BACKOFF_MS);
     expect(Number.isFinite(backoffDelay(2000, 0, 30_000, 0.5))).toBe(true);
+  });
+
+  test("never returns a delay below the floor, even for a tiny non-zero min", () => {
+    expect(backoffDelay(0, 1, 30_000, 0)).toBe(MIN_BACKOFF_MS);
   });
 });
 
@@ -223,11 +227,13 @@ describe("HubClient against a misbehaving hub", () => {
 
   test("backoff resets after each successful connection", async () => {
     const fake = await fakeHub({ onReady: (ws) => setTimeout(() => ws.terminate(), 5) });
-    const a = client(fake.url, alice, { backoffMinMs: 20, backoffMaxMs: 5000, random: () => 1 });
+    // backoffMinMs is kept well above MIN_BACKOFF_MS so this test's assertion
+    // exercises the reset logic, not the floor from the test below.
+    const a = client(fake.url, alice, { backoffMinMs: 200, backoffMaxMs: 5000, random: () => 1 });
     await waitFor(() => fake.connections() >= 5);
     const delays = a.logs.filter((l) => l.includes("retrying in")).map((l) => Number(/in (\d+)ms/.exec(l)?.[1]));
     expect(delays.length).toBeGreaterThanOrEqual(4);
-    expect(delays.every((d) => d === 20)).toBe(true);
+    expect(delays.every((d) => d === 200)).toBe(true);
   });
 
   test("a send pending when the session is superseded is rejected as superseded, not hub disconnected", async () => {
