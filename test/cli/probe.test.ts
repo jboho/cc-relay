@@ -26,7 +26,11 @@ describe("sntpOffset", () => {
     const originalPath = process.env.PATH;
     process.env.PATH = `${dir}:${originalPath ?? ""}`;
     try {
-      await sntpOffset();
+      // 127.0.0.1 rather than the default time.apple.com: nothing there
+      // answers NTP, so sntp's own -t 2 timeout fails fast without this test
+      // depending on network access. What's under test is the PATH decoy
+      // never running, not whether a real server answers.
+      await sntpOffset("127.0.0.1");
     } finally {
       process.env.PATH = originalPath;
     }
