@@ -1,0 +1,4 @@
+# hono 4.13.9 (via @modelcontextprotocol/sdk) is younger than pnpm's
+# minimumReleaseAge gate; pin the previous release until it ages in.
+overrides:
+  hono: 4.13.8
