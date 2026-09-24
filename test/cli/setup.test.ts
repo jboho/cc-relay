@@ -363,6 +363,7 @@ describe("remove and list", () => {
     const io = fakeIo(host.home);
     expect(remove(io, "bob")).toBe(0);
     expect(io.stdout).toContain("Restart cc-relay hub to drop bob from its allowlist; until then the hub still accepts them.");
+    expect(io.stdout).toContain("Restart any relay sessions to pick up the change.");
   });
 
   test("removing a peer on a guest (no hub here) does not print the hub-restart warning", async () => {
@@ -373,6 +374,7 @@ describe("remove and list", () => {
     const io = fakeIo(guest.home);
     expect(remove(io, "alice")).toBe(0);
     expect(io.stdout.some((l) => l.includes("Restart cc-relay hub"))).toBe(false);
+    expect(io.stdout).toContain("Restart any relay sessions to pick up the change.");
   });
 
   test("removing an unknown alias exits 1", async () => {
