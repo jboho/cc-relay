@@ -2,7 +2,7 @@ import nacl from "tweetnacl";
 import WebSocket from "ws";
 import { signChallenge, signHello } from "../../src/protocol/auth.js";
 import { fromB64u, toB64u } from "../../src/protocol/encoding.js";
-import type { HelloFrame, HubFrame } from "../../src/protocol/frames.js";
+import { type HelloFrame, type HubFrame, parseHubFrame } from "../../src/protocol/frames.js";
 import { type Identity, peerId } from "../../src/protocol/identity.js";
 import type { AllowedPeer } from "../../src/hub/handshake.js";
 import { generatePath } from "../../src/hub/port.js";
@@ -45,6 +45,11 @@ export class Probe {
   private cursor = 0;
   readonly closed: Promise<number>;
   private waiters: (() => void)[] = [];
+  // Set the first time the hub sends something that fails HubFrame's schema.
+  // A frame that doesn't parse must not be silently dropped: it's stronger
+  // evidence of a hub bug than any individual test assertion, so every
+  // pending and future next() throws it instead of hanging or skipping it.
+  private failure: Error | undefined;
 
   constructor(url: string, options?: WebSocket.ClientOptions) {
     this.ws = options ? new WebSocket(url, options) : new WebSocket(url);
@@ -54,7 +59,12 @@ export class Probe {
     this.ws.on("message", (data) => {
       const text = data.toString();
       this.raw.push(text);
-      this.frames.push(JSON.parse(text) as HubFrame);
+      const frame = parseHubFrame(text);
+      if (!frame) {
+        this.failure ??= new Error(`Probe received a frame that failed HubFrame schema validation: ${text}`);
+      } else {
+        this.frames.push(frame);
+      }
       for (const w of this.waiters.splice(0)) w();
     });
     this.closed = new Promise((resolve) => this.ws.on("close", (code) => resolve(code)));
@@ -75,10 +85,11 @@ export class Probe {
   // Returns frames in arrival order, each exactly once.
   async next(): Promise<HubFrame> {
     // Advance the cursor only once a frame is actually returned: if the wait
-    // below throws (closed before one arrived), a bumped cursor would skip a
-    // frame that shows up on a later, unrelated call.
+    // below throws (closed before one arrived, or a schema failure), a bumped
+    // cursor would skip a frame that shows up on a later, unrelated call.
     const index = this.cursor;
     while (this.frames.length <= index) {
+      if (this.failure) throw this.failure;
       await Promise.race([
         new Promise<void>((resolve) => this.waiters.push(resolve)),
         this.closed.then(() => {
