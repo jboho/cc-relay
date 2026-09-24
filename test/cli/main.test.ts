@@ -1,4 +1,7 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
 import { loadHub, loadIdentity } from "../../src/channel/config.js";
@@ -27,9 +30,11 @@ describe("main", () => {
     [["add", "x", "--via", "carrier-pigeon"], "--via must be one of"],
     [["remove"], "expected exactly one alias"],
     [["list", "extra"], "list takes no arguments"],
+    [["channel", "extra"], "channel takes no arguments"],
   ])("%j is a usage error", async (argv, message) => {
     const io = fakeIo(nextHome());
     expect(await main(argv, io)).toBe(EX_USAGE);
+    expect(io.stdout).toEqual([]);
     expect(io.stderr[0]).toContain(message);
     expect(io.stderr[1]).toBe(USAGE);
   });
@@ -62,5 +67,52 @@ describe("main", () => {
     const io = fakeIo(home);
     expect(await main(["add", "not-a-card"], io)).toBe(1);
     expect(io.stderr[0]).toMatch(/^cc-relay: /);
+  });
+
+  test("hub reports a port already in use as a setup error, not a stack trace", async () => {
+    const home = nextHome();
+    await main(
+      ["init", "--alias", "alice", "--host", "--mode", "loopback", "--port", "23997", "--name", "127.0.0.1"],
+      fakeIo(home),
+    );
+    const blocker = createServer();
+    await new Promise<void>((resolve, reject) => {
+      blocker.once("error", reject);
+      blocker.listen({ host: "127.0.0.1", port: 23997, exclusive: true }, () => resolve());
+    });
+    try {
+      const io = fakeIo(home);
+      expect(await main(["hub"], io)).toBe(1);
+      expect(io.stderr).toHaveLength(1);
+      expect(io.stderr[0]).toMatch(/^cc-relay: /);
+      expect(io.stderr[0]).toContain("23997");
+    } finally {
+      await new Promise((resolve) => blocker.close(resolve));
+    }
+  });
+
+  test("init under an unwritable parent reports a setup error, not a stack trace", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "cc-relay-main-locked-"));
+    chmodSync(parent, 0o500);
+    try {
+      const io = fakeIo(join(parent, "home"));
+      expect(await main(["init", "--alias", "dave"], io)).toBe(1);
+      expect(io.stderr).toHaveLength(1);
+      expect(io.stderr[0]).toMatch(/^cc-relay: /);
+    } finally {
+      chmodSync(parent, 0o700);
+      rmSync(parent, { recursive: true, force: true });
+    }
+  });
+
+  test("an error that is not a known setup problem is rethrown, not turned into exit 1", async () => {
+    const home = nextHome();
+    await main(["init", "--alias", "carol"], fakeIo(home));
+    const io = fakeIo(home);
+    const boom = new Error("boom");
+    io.out = () => {
+      throw boom;
+    };
+    await expect(main(["list"], io)).rejects.toBe(boom);
   });
 });

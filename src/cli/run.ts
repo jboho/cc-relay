@@ -1,6 +1,7 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Interfaces, resolveBindHost } from "../hub/netif.js";
+import { PortError } from "../hub/port.js";
 import { startHub } from "../hub/server.js";
 import { resolveTailscale } from "../hub/tailscale.js";
 import { tailscaleWhois, type Whois } from "../hub/whois.js";
@@ -13,6 +14,29 @@ import type { Io } from "./io.js";
 
 export interface HubDeps {
   interfaces?: Interfaces;
+}
+
+// Node's net/http listen() attaches address/port to the error it emits, but
+// NodeJS.ErrnoException doesn't declare them.
+interface ListenErrno extends NodeJS.ErrnoException {
+  address?: string;
+  port?: number;
+}
+
+// Node reports a listen/bind failure's errno without a human-readable summary;
+// spell out the common ones so the message doesn't force the operator to look
+// up EADDRINUSE.
+function describeListenErrno(code: string | undefined): string {
+  switch (code) {
+    case "EADDRINUSE":
+      return "address already in use";
+    case "EACCES":
+      return "permission denied";
+    case "EADDRNOTAVAIL":
+      return "address not available";
+    default:
+      return "listen failed";
+  }
 }
 
 export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
@@ -30,15 +54,33 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
     const { bin } = await resolveTailscale();
     whois = tailscaleWhois({ bin, onError: (why) => io.err(`cc-relay hub: ${why}`) });
   }
-  const running = await startHub({
-    mode: config.mode,
-    host,
-    port: config.port,
-    path: config.path,
-    hubId: self.signPub,
-    allow: hubAllow(self, peers, config.tailscaleLogin),
-    ...(whois ? { whois } : {}),
-  });
+  let running: Awaited<ReturnType<typeof startHub>>;
+  try {
+    running = await startHub({
+      mode: config.mode,
+      host,
+      port: config.port,
+      path: config.path,
+      hubId: self.signPub,
+      allow: hubAllow(self, peers, config.tailscaleLogin),
+      ...(whois ? { whois } : {}),
+    });
+  } catch (err) {
+    // Node sets .syscall to "listen"/"bind" only for a failure of that actual
+    // call (EADDRINUSE, EACCES, EADDRNOTAVAIL, ...); anything else (a bad
+    // whois binary, a wiring bug) must keep its stack, not read as a port problem.
+    const errno = err as ListenErrno;
+    if (errno?.syscall === "listen" || errno?.syscall === "bind") {
+      const boundHost = errno.address ?? host;
+      const boundPort = errno.port ?? config.port;
+      const hint = errno.code === "EADDRINUSE" ? "; is another cc-relay hub running?" : "";
+      throw new PortError(
+        `cannot listen on ${boundHost}:${boundPort}: ${describeListenErrno(errno.code)} (${errno.code})${hint}`,
+        { cause: err },
+      );
+    }
+    throw err;
+  }
   io.out(`cc-relay hub listening on ${host}:${running.port} (${config.mode} mode, ${peers.length} peer${peers.length === 1 ? "" : "s"})`);
   try {
     await io.until();

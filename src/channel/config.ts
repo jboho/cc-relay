@@ -80,7 +80,14 @@ export function checkPrivate(path: string, what: string, kind: "directory" | "fi
 }
 
 export function ensureHome(home: string): void {
-  mkdirSync(home, { recursive: true, mode: 0o700 });
+  try {
+    mkdirSync(home, { recursive: true, mode: 0o700 });
+  } catch (err) {
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM") || isErrno(err, "ENOTDIR")) {
+      throw new ConfigError(`cannot create cc-relay home ${home}`, "permissions", { cause: err });
+    }
+    throw err;
+  }
   checkPrivate(home, "cc-relay home", "directory");
 }
 

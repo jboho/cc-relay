@@ -8,13 +8,33 @@ const longRunning = argv[0] === "hub" || argv[0] === "channel";
 
 function until(): Promise<void> {
   return new Promise((resolve) => {
-    process.once("SIGINT", () => resolve());
-    process.once("SIGTERM", () => resolve());
+    const isChannel = argv[0] === "channel";
+    // One handler for all four events: whichever fires first removes the
+    // other three, so a signal after stdin closes (or vice versa) is a no-op
+    // rather than a second resolve.
+    function done(): void {
+      process.off("SIGINT", done);
+      process.off("SIGTERM", done);
+      if (isChannel) {
+        process.stdin.off("end", done);
+        process.stdin.off("close", done);
+      }
+      resolve();
+    }
+    process.once("SIGINT", done);
+    process.once("SIGTERM", done);
     // Claude Code closes the channel's stdin when the session ends; without
     // this the channel would outlive it, still connected to the hub.
-    if (argv[0] === "channel") {
-      process.stdin.once("end", () => resolve());
-      process.stdin.once("close", () => resolve());
+    if (isChannel) {
+      // stdin may already be closed by the time until() is called (a very
+      // short-lived Claude Code session): the 'end'/'close' events won't fire
+      // again, so this must resolve immediately instead of waiting forever.
+      if (process.stdin.readableEnded || process.stdin.destroyed) {
+        done();
+        return;
+      }
+      process.stdin.once("end", done);
+      process.stdin.once("close", done);
     }
   });
 }

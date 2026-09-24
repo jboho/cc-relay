@@ -4,7 +4,6 @@ import { BindError } from "../hub/bind.js";
 import { PortError } from "../hub/port.js";
 import { TailscaleError } from "../hub/tailscale.js";
 import { CardError } from "../protocol/card.js";
-import { EncodingError } from "../protocol/encoding.js";
 import { IdentityError } from "../protocol/identity.js";
 import { doctor } from "./doctor.js";
 import { type Io, UsageError } from "./io.js";
@@ -27,7 +26,11 @@ export const USAGE = `usage: cc-relay <command>
   doctor                                   check the setup and say what's wrong`;
 
 // Errors that describe a problem the user can fix: print the message only.
-const EXPECTED = [ConfigError, BindError, PortError, TailscaleError, CardError, EncodingError, IdentityError];
+// EncodingError is deliberately not here: every user-facing decode path
+// (decodeCard, the config loaders, parseIdentity) already wraps it as
+// CardError/ConfigError/IdentityError, so a raw one reaching here is a bug,
+// not a setup problem, and must keep its stack.
+const EXPECTED = [ConfigError, BindError, PortError, TailscaleError, CardError, IdentityError];
 
 export const EX_USAGE = 64;
 
@@ -130,7 +133,14 @@ export async function main(argv: readonly string[], io: Io): Promise<number> {
       return EX_USAGE;
     }
     if (EXPECTED.some((E) => err instanceof E)) {
-      io.err(`cc-relay: ${(err as Error).message}`);
+      let message = (err as Error).message;
+      // PortError's own message doesn't always carry the errno (e.g. pickPort's
+      // "cannot bind host:port"); append it here rather than in every thrower.
+      if (err instanceof PortError) {
+        const code = (err.cause as NodeJS.ErrnoException | undefined)?.code;
+        if (code && !message.includes(code)) message += ` (${code})`;
+      }
+      io.err(`cc-relay: ${message}`);
       return 1;
     }
     throw err;
