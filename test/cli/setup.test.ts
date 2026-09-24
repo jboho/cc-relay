@@ -377,6 +377,17 @@ describe("remove and list", () => {
     expect(io.stdout).toContain("Restart any relay sessions to pick up the change.");
   });
 
+  test("a malformed hub.json fails remove() before peers.json is touched", async () => {
+    const host = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const c = cardOf(guest.home);
+    add(fakeIo(host.home), { card: c.text, confirm: c.fp });
+    const before = readFileSync(paths(host.home).peers, "utf8");
+    writeFileSync(paths(host.home).hub, "not json", { mode: 0o600 });
+    expect(() => remove(fakeIo(host.home), "bob")).toThrow(ConfigError);
+    expect(readFileSync(paths(host.home).peers, "utf8")).toBe(before);
+  });
+
   test("removing an unknown alias exits 1", async () => {
     const { home } = await fresh("bob");
     const io = fakeIo(home);
