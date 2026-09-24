@@ -108,6 +108,10 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
     // Checked first, so a session launched without the ask rule can't send at
     // all, whatever else is wrong with the call. Re-read on every call, not
     // cached from startup, since the settings file can change mid-session.
+    // This runs synchronously, before the awaited work below (sealFor, hub.send);
+    // it's a backstop, not the real gate - Claude Code's own approval prompt,
+    // from the ask rule this check confirms was loaded, has already happened
+    // by the time this handler runs at all.
     const launch = deps.launch();
     if (!launch.ok) {
       return fail(`blocked: ${launch.reason}. Start the session with the claude-relay alias, then run \`cc-relay doctor\`.`);
