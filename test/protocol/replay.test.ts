@@ -41,4 +41,12 @@ describe("ReplayGuard", () => {
     expect(() => new ReplayGuard(1000, 1.5)).toThrow(RangeError);
     expect(() => new ReplayGuard(1000, Number.NaN)).toThrow(RangeError);
   });
+
+  test("admit tells a repeat apart from a full cache", () => {
+    const guard = new ReplayGuard(1000, 1);
+    expect(guard.admit("a", 0)).toBe("new");
+    expect(guard.admit("a", 1)).toBe("seen");
+    expect(guard.admit("b", 1)).toBe("full");
+    expect(guard.admit("b", 1000)).toBe("new");
+  });
 });

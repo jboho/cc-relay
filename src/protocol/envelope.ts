@@ -2,8 +2,20 @@ import nacl from "tweetnacl";
 import { z } from "zod";
 import { fromB64u, toB64u, utf8 } from "./encoding.js";
 
+// "wiring" is a local key bug, "invalid" a malformed message, "too_large" an
+// oversized one. Callers map only "too_large" to a user-facing error.
+export type EnvelopeErrorCode = "wiring" | "invalid" | "too_large";
+
 export class EnvelopeError extends Error {
   override name = "EnvelopeError";
+
+  constructor(
+    message: string,
+    readonly code: EnvelopeErrorCode,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
 }
 
 export const MAX_TEXT_BYTES = 32 * 1024;
@@ -42,10 +54,10 @@ export function newMessageId(): string {
 // instead of making every message look like tampering.
 function assertBoxKeys(publicKey: Uint8Array, secretKey: Uint8Array): void {
   if (publicKey.length !== nacl.box.publicKeyLength) {
-    throw new EnvelopeError("box public key has the wrong length");
+    throw new EnvelopeError("box public key has the wrong length", "wiring");
   }
   if (secretKey.length !== nacl.box.secretKeyLength) {
-    throw new EnvelopeError("box secret key has the wrong length");
+    throw new EnvelopeError("box secret key has the wrong length", "wiring");
   }
 }
 
@@ -55,9 +67,9 @@ function assertBoxKeys(publicKey: Uint8Array, secretKey: Uint8Array): void {
 export function seal(inner: Inner, recipientBoxPub: Uint8Array, senderBoxSec: Uint8Array): Sealed {
   assertBoxKeys(recipientBoxPub, senderBoxSec);
   const parsed = InnerSchema.safeParse(inner);
-  if (!parsed.success) throw new EnvelopeError("message is invalid", { cause: parsed.error });
+  if (!parsed.success) throw new EnvelopeError("message is invalid", "invalid", { cause: parsed.error });
   const plaintext = utf8(JSON.stringify(parsed.data));
-  if (plaintext.length > MAX_PLAINTEXT_BYTES) throw new EnvelopeError("message is too large");
+  if (plaintext.length > MAX_PLAINTEXT_BYTES) throw new EnvelopeError("message is too large", "too_large");
   const nonce = nacl.randomBytes(nacl.box.nonceLength);
   const ciphertext = nacl.box(
     plaintext,

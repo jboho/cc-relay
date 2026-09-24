@@ -1,3 +1,7 @@
+// "full" is distinct from "seen" so a caller can tell an attack on the cache
+// (or a sizing bug) apart from an actual replay; both still fail closed.
+export type Admission = "new" | "seen" | "full";
+
 export class ReplayGuard {
   // Insertion order equals expiry order because every entry gets the same TTL,
   // which lets prune() stop at the first live entry.
@@ -20,15 +24,19 @@ export class ReplayGuard {
     }
   }
 
-  // True the first time a key is seen within the TTL; false for a repeat.
-  // When full it returns false (fail closed) instead of evicting live entries,
-  // since eviction would reopen a replay window.
-  checkAndRemember(key: string, now: number): boolean {
+  // "new" the first time a key is seen within the TTL, "seen" for a repeat.
+  // When full it returns "full" (fail closed) instead of evicting live
+  // entries, since eviction would reopen a replay window.
+  admit(key: string, now: number): Admission {
     this.prune(now);
-    if (this.expiries.has(key)) return false;
-    if (this.expiries.size >= this.maxEntries) return false;
+    if (this.expiries.has(key)) return "seen";
+    if (this.expiries.size >= this.maxEntries) return "full";
     this.expiries.set(key, now + this.ttlMs);
-    return true;
+    return "new";
+  }
+
+  checkAndRemember(key: string, now: number): boolean {
+    return this.admit(key, now) === "new";
   }
 
   get size(): number {

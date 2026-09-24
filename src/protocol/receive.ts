@@ -19,7 +19,8 @@ export type Rejection =
   | "sender_mismatch"
   | "recipient_mismatch"
   | "stale"
-  | "replay";
+  | "replay"
+  | "overloaded";
 
 export type Acceptance = { ok: true; peer: Peer; message: Inner } | { ok: false; reason: Rejection };
 
@@ -54,8 +55,8 @@ export function acceptInbound(frame: InboundFrame, ctx: ReceiveContext): Accepta
   if (message.from !== frame.from) return { ok: false, reason: "sender_mismatch" };
   if (message.to !== ctx.selfId) return { ok: false, reason: "recipient_mismatch" };
   if (Math.abs(ctx.now - message.ts) > MAX_SKEW_MS) return { ok: false, reason: "stale" };
-  if (!ctx.replay.checkAndRemember(`${frame.from}:${message.id}`, ctx.now)) {
-    return { ok: false, reason: "replay" };
-  }
+  const admission = ctx.replay.admit(`${frame.from}:${message.id}`, ctx.now);
+  if (admission === "seen") return { ok: false, reason: "replay" };
+  if (admission === "full") return { ok: false, reason: "overloaded" };
   return { ok: true, peer, message };
 }

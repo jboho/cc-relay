@@ -151,4 +151,10 @@ describe("acceptInbound", () => {
     expect(() => acceptInbound(f, context({ now: Number.NaN }))).toThrow(RangeError);
     expect(() => acceptInbound(f, context({ now: undefined as unknown as number }))).toThrow(RangeError);
   });
+
+  test("a full replay cache is reported as overloaded, not as a replay", () => {
+    const ctx = context({ replay: new ReplayGuard(SEEN_TTL_MS, 1) });
+    expect(acceptInbound(frame(alice, alice, inner(alice)), ctx).ok).toBe(true);
+    expect(acceptInbound(frame(bob, bob, inner(bob)), ctx)).toEqual({ ok: false, reason: "overloaded" });
+  });
 });

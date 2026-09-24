@@ -122,6 +122,21 @@ test("a plaintext at exactly MAX_PLAINTEXT_BYTES fits the frame schema; one byte
   expect(() => seal(overBy1, bob.boxPub, alice.boxSec)).toThrow(/too large/);
 });
 
+test("EnvelopeError codes keep wiring, invalid and too-large apart", () => {
+  const codeOf = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (err) {
+      return err instanceof EnvelopeError ? err.code : "not an EnvelopeError";
+    }
+    return "no throw";
+  };
+  expect(codeOf(() => seal(message(), bob.boxPub.subarray(0, 31), alice.boxSec))).toBe("wiring");
+  expect(codeOf(() => seal(message({ id: "short" }), bob.boxPub, alice.boxSec))).toBe("invalid");
+  const huge = "\u0001".repeat(MAX_TEXT_BYTES);
+  expect(codeOf(() => seal(message({ text: huge }), bob.boxPub, alice.boxSec))).toBe("too_large");
+});
+
 describe("nonce discipline", () => {
   test("seal takes no nonce parameter", () => {
     // Three parameters: message, recipient box key, sender box secret. A nonce
