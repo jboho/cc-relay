@@ -629,7 +629,11 @@ describe("hub: upgrade abort safety", () => {
     // allowHalfOpen: true and no auth timer on this path can withhold forever.
     const rawSockets: Socket[] = [];
     try {
-      const terminated = await Promise.all(
+      // Seeing 'end' here only proves the hub sent its FIN, not that the
+      // pending slot was released — a half-open peer sees that FIN whether
+      // or not the hub destroyed its side afterward. The real assertion is
+      // the authed() call below: it only succeeds if both slots came back.
+      await Promise.all(
         Array.from({ length: 2 }, () => {
           return new Promise<void>((resolve) => {
             const sock = netConnect({ host: "127.0.0.1", port: h.port, allowHalfOpen: true }, () => {
@@ -649,12 +653,41 @@ describe("hub: upgrade abort safety", () => {
           });
         }),
       );
-      expect(terminated).toHaveLength(2);
 
       const p = await authed(h, alice);
       expect(p.opened).toBe(true);
     } finally {
       for (const sock of rawSockets) sock.destroy();
+    }
+  });
+
+  test("a half-open peer on a wrong-path upgrade doesn't keep the hub's socket open", async () => {
+    const h = await hub();
+    const sock = netConnect({ host: "127.0.0.1", port: h.port, allowHalfOpen: true });
+    try {
+      const gone = new Promise<string>((resolve) => {
+        sock.on("error", (e: NodeJS.ErrnoException) => resolve(e.code ?? "error"));
+        sock.on("close", () => resolve("close"));
+      });
+      sock.on("data", () => {});
+      // After the hub's FIN: a destroyed hub socket answers writes with RST;
+      // a half-open one accepts them.
+      sock.once("end", () => {
+        const poke = setInterval(() => sock.write("x"), 20);
+        void gone.finally(() => clearInterval(poke));
+      });
+      sock.on("connect", () => sock.write(rawUpgradeRequest("wrong")));
+      let raceTimer: ReturnType<typeof setTimeout> | undefined;
+      const outcome = await Promise.race([
+        gone,
+        new Promise<string>((r) => {
+          raceTimer = setTimeout(() => r("still open"), 1000);
+        }),
+      ]);
+      clearTimeout(raceTimer);
+      expect(outcome).not.toBe("still open");
+    } finally {
+      sock.destroy();
     }
   });
 
@@ -687,8 +720,15 @@ describe("hub: upgrade abort safety", () => {
       held.push(p);
     }
     const extra = probe(h.url);
-    await extra.closed;
-    expect(extra.opened).toBe(false);
+    // Race open() against closed() rather than only awaiting closed(): if
+    // pending had drifted negative and the cap failed to saturate, extra
+    // would actually open and stay open, so waiting on closed() alone would
+    // hang for the full test timeout instead of failing on a clear assertion.
+    const openedFirst = await Promise.race([
+      extra.open().then(() => true),
+      extra.closed.then(() => false),
+    ]).catch(() => false);
+    expect(openedFirst).toBe(false);
   });
 
   test("a bad-key upgrade on the correct path gets the same bare 404, not ws's own 400 text/html body", async () => {
