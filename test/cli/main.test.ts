@@ -2,11 +2,36 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
-import { loadHub, loadIdentity } from "../../src/channel/config.js";
+import { loadHub, loadIdentity, saveHub } from "../../src/channel/config.js";
 import { tempHomes } from "../channel/helpers.js";
 import { fakeIo } from "./helpers.js";
+
+// main() can't inject HubDeps, so a tailscale-mode hub() resolves its bind
+// host against this Mac's real interfaces. That has nothing to do with what
+// this suite tests (main's error-mapping), and this machine likely has no
+// utun address, which would throw a BindError before resolveTailscale is
+// even reached -- passing the assertions below for the wrong reason. Mocked
+// here instead of via HubDeps so the real resolveBindHost keeps running for
+// every other mode these tests use (loopback, lan).
+vi.mock("../../src/hub/netif.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/hub/netif.js")>();
+  return {
+    ...actual,
+    resolveBindHost: (...args: Parameters<typeof actual.resolveBindHost>) =>
+      args[0] === "tailscale" ? "100.101.102.103" : actual.resolveBindHost(...args),
+  };
+});
+
+vi.mock("../../src/hub/tailscale.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/hub/tailscale.js")>();
+  return {
+    ...actual,
+    resolveTailscale: () =>
+      Promise.reject(new actual.TailscaleError("tailscale CLI not found or not working; tried: none")),
+  };
+});
 
 const nextHome = tempHomes("cli-main");
 
@@ -89,6 +114,25 @@ describe("main", () => {
     } finally {
       await new Promise((resolve) => blocker.close(resolve));
     }
+  });
+
+  test("hub reports a tailscale setup problem as a setup error, not a stack trace", async () => {
+    const home = nextHome();
+    await main(
+      ["init", "--alias", "alice", "--host", "--mode", "loopback", "--port", "23998", "--name", "127.0.0.1"],
+      fakeIo(home),
+    );
+    const existing = loadHub(home);
+    if (!existing) throw new Error("expected init --host to have written a hub config");
+    // Rewritten to tailscale mode directly rather than via `init --host
+    // --mode tailscale`: init resolves the real bind host at setup time too,
+    // and this machine has no real utun/tailscale interface to give it.
+    saveHub(home, { ...existing, mode: "tailscale", tailscaleLogin: "alice@example.com" });
+    const io = fakeIo(home);
+    expect(await main(["hub"], io)).toBe(1);
+    expect(io.stderr).toHaveLength(1);
+    expect(io.stderr[0]).toMatch(/^cc-relay: /);
+    expect(io.stderr[0]).toContain("tailscale CLI not found or not working; tried: none");
   });
 
   test("init under an unwritable parent reports a setup error, not a stack trace", async () => {
