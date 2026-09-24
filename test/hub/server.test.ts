@@ -4,7 +4,10 @@ import nacl from "tweetnacl";
 import WebSocket from "ws";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { toB64u } from "../../src/protocol/encoding.js";
-import { generateIdentity, peerId } from "../../src/protocol/identity.js";
+import { type Inner, MAX_PLAINTEXT_BYTES, newMessageId, seal } from "../../src/protocol/envelope.js";
+import { generateIdentity, type Identity, peerId } from "../../src/protocol/identity.js";
+import { acceptInbound, SEEN_TTL_MS } from "../../src/protocol/receive.js";
+import { ReplayGuard } from "../../src/protocol/replay.js";
 import { BindError } from "../../src/hub/bind.js";
 import { MAX_PAYLOAD_BYTES, startHub } from "../../src/hub/server.js";
 import {
@@ -142,6 +145,29 @@ const mallory = generateIdentity("mallory");
 // A conforming path for tests that need one but aren't exercising path
 // validation itself (HUB_PATH_RE requires exactly 22 base64url characters).
 const VALID_PATH = "A".repeat(22);
+
+// Builds the largest legal plaintext: an Inner whose JSON-stringified form
+// lands exactly on MAX_PLAINTEXT_BYTES. \u0001 escapes to 6 ASCII bytes per
+// raw UTF-8 byte under JSON.stringify, the cheapest way to reach that cap
+// without the text field's own raw length (bounded separately, by
+// MAX_TEXT_BYTES = 32 KiB) needing to be anywhere near that big; the
+// remainder is topped up with plain ASCII, which doesn't inflate at all.
+function maxLegalInner(from: Identity, to: Identity): Inner {
+  const base: Inner = {
+    v: 1,
+    id: newMessageId(),
+    ts: Date.now(),
+    from: peerId(from.signPub),
+    to: peerId(to.signPub),
+    text: "",
+  };
+  const overhead = Buffer.byteLength(JSON.stringify(base));
+  const budget = MAX_PLAINTEXT_BYTES - overhead;
+  const controlChars = "\u0001".repeat(Math.floor(budget / 6));
+  const used = Buffer.byteLength(JSON.stringify({ ...base, text: controlChars })) - overhead;
+  const text = controlChars + "a".repeat(budget - used);
+  return { ...base, text };
+}
 
 const hubs: TestHub[] = [];
 const probes: Probe[] = [];
@@ -1054,5 +1080,37 @@ describe("hub: fail-closed handler throws and teardown", () => {
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
     }
+  });
+});
+
+describe("hub: end-to-end wire", () => {
+  test("a maximum-size sealed envelope round-trips through a real hub, schema-checked, and decrypts intact", async () => {
+    const h = await hub();
+    const a = await authed(h, alice);
+    const b = await authed(h, bob);
+
+    const inner = maxLegalInner(alice, bob);
+    const sealed = seal(inner, bob.boxPub, alice.boxSec);
+    const frame = { type: "msg" as const, ref: "e2e-max", to: peerId(bob.signPub), ...sealed };
+
+    a.send(frame);
+    // b.next() already runs the raw text through parseHubFrame (see helpers.ts);
+    // a schema violation would throw here instead of handing back a frame.
+    const delivered = await b.next();
+    if (delivered.type !== "msg") throw new Error(`expected a msg frame, got ${delivered.type}`);
+    expect(delivered.from).toBe(peerId(alice.signPub));
+
+    const alicePeer = { id: peerId(alice.signPub), alias: "alice", signPub: alice.signPub, boxPub: alice.boxPub };
+    const accepted = acceptInbound(delivered, {
+      selfId: peerId(bob.signPub),
+      selfBoxSec: bob.boxSec,
+      peers: new Map([[alicePeer.id, alicePeer]]),
+      replay: new ReplayGuard(SEEN_TTL_MS),
+      now: Date.now(),
+    });
+    if (!accepted.ok) throw new Error(`expected acceptance, got rejection: ${accepted.reason}`);
+    expect(accepted.message).toEqual(inner);
+
+    expect(await a.next()).toEqual({ type: "ack", ref: "e2e-max" });
   });
 });
