@@ -117,6 +117,11 @@ describe("doctor", () => {
     if (!link) throw new Error("expected a link");
     saveLink(moved.guestHome, { ...link, path: "Z".repeat(22) });
     expect((await byName(moved.guestHome, healthy())).hub).toMatchObject({ status: "FAIL", detail: expect.stringContaining("404") });
+
+    expect((await byName(stopped.guestHome, healthy({ probe: async () => "timeout" }))).hub).toMatchObject({
+      status: "FAIL",
+      detail: expect.stringContaining("client isolation"),
+    });
   });
 
   test("the host probes its own hub", async () => {
@@ -203,6 +208,28 @@ describe("doctor", () => {
       const home = await tailscaleGuest();
       const checks = await byName(home, healthy({ ...ok, connectable: async () => false, tailscale: async () => { throw new Error("no tailscale binary"); } }));
       expect(checks.tailscale).toMatchObject({ status: "FAIL", detail: "no tailscale binary" });
+    });
+
+    test("skips rather than PASS when the host can't be reached at all", async () => {
+      const home = await tailscaleGuest();
+      const tried: number[] = [];
+      const checks = await byName(
+        home,
+        healthy({ ...ok, probe: async () => "timeout" as const, connectable: async (_h, port) => (tried.push(port), false) }),
+      );
+      expect(checks.grant).toMatchObject({ status: "SKIP", detail: expect.stringContaining("could not reach") });
+      expect(tried).toEqual([]);
+    });
+
+    test("excludes the hub's own port from the grant probe", async () => {
+      const home = await tailscaleGuest();
+      const link = loadLink(home);
+      if (!link) throw new Error("expected a link");
+      saveLink(home, { ...link, port: 8080 });
+      const tried: number[] = [];
+      const checks = await byName(home, healthy({ ...ok, connectable: async (_h, port) => (tried.push(port), false) }));
+      expect(tried).not.toContain(8080);
+      expect(checks.grant?.status).toBe("PASS");
     });
   });
 });

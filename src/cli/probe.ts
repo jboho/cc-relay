@@ -62,6 +62,8 @@ export function parseSntp(stdout: string): number | null {
 // Seconds between this clock and time.apple.com, or null if unreachable.
 export function sntpOffset(server = "time.apple.com"): Promise<number | null> {
   return new Promise((resolve) => {
+    // A non-zero exit is deliberately not checked: a failed lookup leaves stdout
+    // unparseable, parseSntp returns null, and the caller turns that into WARN.
     execFile("sntp", ["-t", "2", server], { timeout: 10_000 }, (_err, stdout) => resolve(parseSntp(String(stdout))));
   });
 }

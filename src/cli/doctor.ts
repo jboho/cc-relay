@@ -95,10 +95,17 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   const settings = checkLaunch(["claude", "--settings", p.settings]);
   if (!settings.ok) {
     add("FAIL", "settings", settings.reason);
-  } else if (JSON.parse(readFileSync(p.settings, "utf8")).permissions?.disableBypassPermissionsMode !== "disable") {
-    add("WARN", "settings", `asks before every send, but ${p.settings} doesn't set permissions.disableBypassPermissionsMode to "disable"`);
   } else {
-    add("PASS", "settings", "asks before every send, and bypass mode is disabled");
+    try {
+      const parsed = JSON.parse(readFileSync(p.settings, "utf8"));
+      if (parsed.permissions?.disableBypassPermissionsMode !== "disable") {
+        add("WARN", "settings", `asks before every send, but ${p.settings} doesn't set permissions.disableBypassPermissionsMode to "disable"`);
+      } else {
+        add("PASS", "settings", "asks before every send, and bypass mode is disabled");
+      }
+    } catch (err) {
+      add("FAIL", "settings", errMessage(err));
+    }
   }
 
   checks.push(checkMcp(home, fileExists));
@@ -160,15 +167,26 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   else add("FAIL", "hub", PROBE_DETAIL[outcome]);
 
   if (link?.via === "tailscale") {
-    const connectable = deps.connectable ?? canConnect;
-    const open: number[] = [];
-    for (const port of GRANT_PROBE_PORTS) {
-      if (await connectable(link.host, port, GRANT_PROBE_TIMEOUT_MS)) open.push(port);
-    }
-    if (open.length > 0) {
-      add("FAIL", "grant", `${link.host} also accepts ports ${open.join(", ")} from this machine; ask the host to scope the Tailscale grant to tcp:${link.port}`);
+    // canConnect returns false both for "closed" and for "never got there", so an
+    // all-false scan can't tell a clean grant from an unreachable host. Gate on the
+    // hub probe's outcome instead: anything past a bare timeout/unresolved means a
+    // TCP connection to this host actually happened, so a closed-port reading means
+    // something. Otherwise skip rather than print a PASS that verified nothing.
+    const reached = outcome !== "timeout" && outcome !== "unresolved";
+    if (!reached) {
+      add("SKIP", "grant", `could not reach ${link.host}; grant not verified`);
     } else {
-      add("PASS", "grant", `${link.host} exposes none of ${GRANT_PROBE_PORTS.join(", ")} to this machine`);
+      const connectable = deps.connectable ?? canConnect;
+      const ports = GRANT_PROBE_PORTS.filter((port) => port !== link.port);
+      const open: number[] = [];
+      for (const port of ports) {
+        if (await connectable(link.host, port, GRANT_PROBE_TIMEOUT_MS)) open.push(port);
+      }
+      if (open.length > 0) {
+        add("FAIL", "grant", `${link.host} also accepts ports ${open.join(", ")} from this machine; ask the host to scope the Tailscale grant to tcp:${link.port}`);
+      } else {
+        add("PASS", "grant", `${link.host} exposes none of ${ports.join(", ")} to this machine`);
+      }
     }
   }
   return checks;
