@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, test } from "vitest";
-import { resolveTailscale, TAILSCALE_CANDIDATES, TailscaleError } from "../../src/hub/tailscale.js";
+import { MAX_OUTPUT_BYTES, resolveTailscale, TAILSCALE_CANDIDATES, TailscaleError } from "../../src/hub/tailscale.js";
 
 const tempDirs: string[] = [];
 
@@ -71,6 +71,13 @@ describe("resolveTailscale", () => {
     const err = await resolveTailscale({ candidates: [hangs], timeoutMs: 100 }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TailscaleError);
     expect((err as Error).message).toContain("(timed out after");
+  });
+
+  test("a candidate that overflows the output buffer reports it distinctly from a timeout", async () => {
+    const overflow = fakeBin("yes | head -c 2000000");
+    const err = await resolveTailscale({ candidates: [overflow] }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TailscaleError);
+    expect((err as Error).message).toContain(`${overflow} (output exceeded ${MAX_OUTPUT_BYTES} bytes)`);
   });
 
   test("the default candidates try PATH first, then the macOS install locations", () => {
