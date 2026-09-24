@@ -3,10 +3,42 @@
 // claude), and it starts the channel the way Claude Code does: from
 // --mcp-config, with stdio shared, so closing our stdin ends the channel.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync } from "node:fs";
+
+// process.stderr.write() is asynchronous on POSIX when stderr is a pipe (as
+// it is here, under the test's StdioClientTransport), so a write issued right
+// before process.exit() can be silently dropped -- verified empirically: a
+// write immediately followed by exit() lost everything past the first pipe
+// buffer, sometimes the whole line. writeSync(2, ...) goes straight to the fd
+// and is guaranteed to land before exit() tears the process down.
+function stderrLine(line) {
+  writeSync(2, `${line}\n`);
+}
 
 const at = process.argv.indexOf("--mcp-config");
+if (at === -1 || process.argv[at + 1] === undefined) {
+  stderrLine("usage: claude --mcp-config <path> [--settings <path>]");
+  process.exit(2);
+}
+
 const server = JSON.parse(readFileSync(process.argv[at + 1], "utf8")).mcpServers["cc-relay"];
 const child = spawn(server.command, server.args, { stdio: "inherit", env: { ...process.env, ...server.env } });
-process.stderr.write(`CHANNEL_PID ${child.pid}\n`);
-child.on("exit", (code) => process.exit(code ?? 1));
+stderrLine(`CHANNEL_PID ${child.pid}`);
+
+// A failing test can kill this fixture (SIGTERM/SIGKILL) before the graceful
+// stdin-close path below reaches the channel; without forwarding, the channel
+// would be left running with no parent, and the next test's session for the
+// same identity fails with "superseded" instead of connecting cleanly.
+let exited = false;
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => child.kill(sig));
+}
+process.on("exit", () => {
+  if (!exited) child.kill("SIGTERM");
+});
+
+child.on("exit", (code) => {
+  exited = true;
+  stderrLine(`CHANNEL_EXIT ${code ?? -1}`);
+  process.exit(code ?? 1);
+});
