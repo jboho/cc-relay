@@ -119,6 +119,13 @@ describe("home and identity", () => {
     writeFileSync(paths(home).identity, "{}", { mode: 0o600 });
     expect(codeOf(() => loadIdentity(home))).toBe("invalid");
   });
+
+  test("writeIdentity refuses a loosened home directory", () => {
+    const home = nextHome();
+    mkdirSync(home, { mode: 0o755 });
+    chmodSync(home, 0o755);
+    expect(codeOf(() => writeIdentity(home, generateIdentity("alice")))).toBe("permissions");
+  });
 });
 
 describe("peers", () => {
@@ -167,6 +174,13 @@ describe("peers", () => {
     const { home, self } = initHome();
     chmodSync(paths(home).peers, 0o644);
     expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+  });
+
+  test("loading refuses a write-only peers file: checkPrivate passes but the read itself fails", () => {
+    const { home, self } = initHome();
+    chmodSync(paths(home).peers, 0o200);
+    expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+    chmodSync(paths(home).peers, 0o600);
   });
 
   test("loading refuses a peers file that is a symlink, even to a private file outside the home", () => {
@@ -235,6 +249,20 @@ describe("hub, link, and endpoint", () => {
     expect(loadHub(home)).toBeUndefined();
     expect(loadLink(home)).toBeUndefined();
     expect(codeOf(() => loadPeers(home, self))).toBe("missing");
+  });
+
+  test("a home that is a regular file is refused as invalid, not as a raw ENOTDIR", () => {
+    const home = nextHome();
+    writeFileSync(home, "not a directory", { mode: 0o600 });
+    const self = generateIdentity("alice");
+    expect(codeOf(() => loadHub(home))).toBe("invalid");
+    expect(codeOf(() => savePeers(home, self, []))).toBe("invalid");
+  });
+
+  test("a directory named hub.json is refused as invalid, not parsed as JSON", () => {
+    const { home } = initHome();
+    mkdirSync(paths(home).hub, { mode: 0o700 });
+    expect(codeOf(() => loadHub(home))).toBe("invalid");
   });
 
   test("loading refuses a hub file that is a symlink, even to a private file outside the home", () => {

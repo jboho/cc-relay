@@ -52,15 +52,21 @@ function isErrno(err: unknown, code: string): boolean {
 // silently repaired: a loosened mode means something outside cc-relay touched it.
 // Known limitation: this checks POSIX mode bits only; macOS ACLs (see `ls -le`)
 // can grant access beyond the mode and are not inspected.
-export function checkPrivate(path: string, what: string): void {
+// `kind` rejects a mismatched filesystem object (a directory standing in for a
+// config file, or vice versa) before anything tries to open it — a FIFO named
+// peers.json would otherwise hang readFileSync forever instead of failing fast.
+export function checkPrivate(path: string, what: string, kind: "directory" | "file"): void {
   let mode: number;
   try {
     const st = lstatSync(path);
     if (st.isSymbolicLink()) throw new ConfigError(`${what} ${path} is a symlink; refusing to follow it`, "permissions");
+    const matches = kind === "directory" ? st.isDirectory() : st.isFile();
+    if (!matches) throw new ConfigError(`${what} ${path} is not a ${kind}`, "invalid");
     mode = st.mode;
   } catch (err) {
     if (err instanceof ConfigError) throw err;
     if (isErrno(err, "ENOENT")) throw new ConfigError(`${what} ${path} does not exist; run cc-relay init`, "missing", { cause: err });
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not accessible`, "permissions", { cause: err });
     throw err;
   }
   if ((mode & 0o077) !== 0) {
@@ -73,13 +79,13 @@ export function checkPrivate(path: string, what: string): void {
 
 export function ensureHome(home: string): void {
   mkdirSync(home, { recursive: true, mode: 0o700 });
-  checkPrivate(home, "cc-relay home");
+  checkPrivate(home, "cc-relay home", "directory");
 }
 
 // Readers never see a half-written file: write a private temp file, then rename
 // over the target (atomic within one directory).
 export function writeJsonAtomic(path: string, value: unknown): void {
-  checkPrivate(dirname(path), "cc-relay home");
+  checkPrivate(dirname(path), "cc-relay home", "directory");
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
     writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
@@ -96,19 +102,29 @@ export function writeJsonAtomic(path: string, value: unknown): void {
 // file that exists but is loose, or is a symlink, still throws "permissions".
 function readJson(path: string, what: string): unknown | undefined {
   try {
-    checkPrivate(dirname(path), "cc-relay home");
+    checkPrivate(dirname(path), "cc-relay home", "directory");
   } catch (err) {
     if (err instanceof ConfigError && err.code === "missing") return undefined;
     throw err;
   }
   try {
-    checkPrivate(path, what);
+    checkPrivate(path, what, "file");
   } catch (err) {
     if (err instanceof ConfigError && err.code === "missing") return undefined;
     throw err;
   }
+  // checkPrivate only inspects the mode bits; the read itself can still fail
+  // (e.g. a write-only file), so that failure gets its own "permissions" code
+  // rather than being mistaken for malformed JSON.
+  let text: string;
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not readable`, "permissions", { cause: err });
+    throw err;
+  }
+  try {
+    return JSON.parse(text);
   } catch (err) {
     throw new ConfigError(`${what} ${path} is not valid JSON`, "invalid", { cause: err });
   }
@@ -126,6 +142,7 @@ function parseWith<T>(schema: z.ZodType<T>, raw: unknown, path: string, what: st
 // ---- identity ----
 
 export function writeIdentity(home: string, identity: Identity): void {
+  checkPrivate(home, "cc-relay home", "directory");
   const path = paths(home).identity;
   try {
     // "wx": never overwrite an existing identity; losing the secret keys
@@ -139,8 +156,8 @@ export function writeIdentity(home: string, identity: Identity): void {
 
 export function loadIdentity(home: string): Identity {
   const path = paths(home).identity;
-  checkPrivate(home, "cc-relay home");
-  checkPrivate(path, "identity file");
+  checkPrivate(home, "cc-relay home", "directory");
+  checkPrivate(path, "identity file", "file");
   try {
     return parseIdentity(readFileSync(path, "utf8"));
   } catch (err) {
