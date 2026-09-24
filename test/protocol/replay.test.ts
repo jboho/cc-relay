@@ -24,4 +24,21 @@ describe("ReplayGuard", () => {
     expect(guard.checkAndRemember("a", 1)).toBe(false);
     expect(guard.checkAndRemember("c", 1000)).toBe(true);
   });
+
+  test("rejects a non-finite or non-positive ttlMs", () => {
+    // A NaN/zero/negative TTL would silently disable the replay window
+    // (every entry expires immediately, or the prune math breaks), which is
+    // a local wiring bug, not something to fail open on.
+    expect(() => new ReplayGuard(Number.NaN)).toThrow(RangeError);
+    expect(() => new ReplayGuard(Number.POSITIVE_INFINITY)).toThrow(RangeError);
+    expect(() => new ReplayGuard(0)).toThrow(RangeError);
+    expect(() => new ReplayGuard(-1)).toThrow(RangeError);
+  });
+
+  test("rejects a non-positive or non-integer maxEntries", () => {
+    expect(() => new ReplayGuard(1000, 0)).toThrow(RangeError);
+    expect(() => new ReplayGuard(1000, -1)).toThrow(RangeError);
+    expect(() => new ReplayGuard(1000, 1.5)).toThrow(RangeError);
+    expect(() => new ReplayGuard(1000, Number.NaN)).toThrow(RangeError);
+  });
 });
