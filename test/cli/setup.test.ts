@@ -385,6 +385,15 @@ describe("remove and list", () => {
     expect(io.stderr[0]).toMatch(/^cc-relay: /);
   });
 
+  test("list on a guest with no hub and no link doesn't point at init --host, which would refuse", async () => {
+    const { home } = await fresh("bob");
+    const io = fakeIo(home);
+    expect(list(io)).toBe(0);
+    expect(io.stdout[1]).toMatch(/no hub/);
+    expect(io.stdout[1]).not.toMatch(/init --host/);
+    expect(io.stdout[1]).toMatch(/add a host's card/);
+  });
+
   test("list shows you, your role and each peer's fingerprint", async () => {
     const host = await fresh("alice", true);
     const guest = await fresh("bob");
