@@ -910,15 +910,18 @@ describe("hub: startup validation", () => {
   test("opts.path must match HUB_PATH_RE", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     try {
-      await expect(
-        startHub({
-          mode: "loopback",
-          host: "127.0.0.1",
-          path: "short",
-          hubId: host.signPub,
-          allow: new Map(),
-        }),
-      ).rejects.toThrow(RangeError);
+      const promise = startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: "short",
+        hubId: host.signPub,
+        allow: new Map(),
+      });
+      // Match the message too, not just the class: a broken shared fixture
+      // (e.g. an accidentally-bad hubId) could throw the same RangeError
+      // class from an earlier check and hide the one this test targets.
+      await expect(promise).rejects.toThrow(RangeError);
+      await expect(promise).rejects.toThrow(/HUB_PATH_RE/);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
@@ -929,16 +932,16 @@ describe("hub: startup validation", () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     try {
       for (const badPort of [0, 65536, 1.5, -1]) {
-        await expect(
-          startHub({
-            mode: "loopback",
-            host: "127.0.0.1",
-            path: VALID_PATH,
-            hubId: host.signPub,
-            allow: new Map(),
-            port: badPort,
-          }),
-        ).rejects.toThrow(RangeError);
+        const promise = startHub({
+          mode: "loopback",
+          host: "127.0.0.1",
+          path: VALID_PATH,
+          hubId: host.signPub,
+          allow: new Map(),
+          port: badPort,
+        });
+        await expect(promise).rejects.toThrow(RangeError);
+        await expect(promise).rejects.toThrow(/opts.port/);
       }
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
@@ -956,15 +959,15 @@ describe("hub: startup validation", () => {
       const badAllow = new Map([
         [peerId(bob.signPub), { id: peerId(alice.signPub), signPub: alice.signPub }],
       ]);
-      await expect(
-        startHub({
-          mode: "loopback",
-          host: "127.0.0.1",
-          path: VALID_PATH,
-          hubId: host.signPub,
-          allow: badAllow,
-        }),
-      ).rejects.toThrow(RangeError);
+      const promise = startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: VALID_PATH,
+        hubId: host.signPub,
+        allow: badAllow,
+      });
+      await expect(promise).rejects.toThrow(RangeError);
+      await expect(promise).rejects.toThrow(/key that does not match/);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
@@ -977,15 +980,15 @@ describe("hub: startup validation", () => {
       const aliceId = peerId(alice.signPub);
       // key === peer.id here, but peer.id was never derived from peer.signPub.
       const badAllow = new Map([[aliceId, { id: aliceId, signPub: bob.signPub }]]);
-      await expect(
-        startHub({
-          mode: "loopback",
-          host: "127.0.0.1",
-          path: VALID_PATH,
-          hubId: host.signPub,
-          allow: badAllow,
-        }),
-      ).rejects.toThrow(RangeError);
+      const promise = startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: VALID_PATH,
+        hubId: host.signPub,
+        allow: badAllow,
+      });
+      await expect(promise).rejects.toThrow(RangeError);
+      await expect(promise).rejects.toThrow(/id does not match its signPub/);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
@@ -997,15 +1000,15 @@ describe("hub: startup validation", () => {
     try {
       const shortKey = alice.signPub.slice(0, 31);
       const badAllow = new Map([[peerId(alice.signPub), { id: peerId(alice.signPub), signPub: shortKey }]]);
-      await expect(
-        startHub({
-          mode: "loopback",
-          host: "127.0.0.1",
-          path: VALID_PATH,
-          hubId: host.signPub,
-          allow: badAllow,
-        }),
-      ).rejects.toThrow(RangeError);
+      const promise = startHub({
+        mode: "loopback",
+        host: "127.0.0.1",
+        path: VALID_PATH,
+        hubId: host.signPub,
+        allow: badAllow,
+      });
+      await expect(promise).rejects.toThrow(RangeError);
+      await expect(promise).rejects.toThrow(/malformed signPub/);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
@@ -1017,16 +1020,16 @@ describe("hub: startup validation", () => {
     try {
       const aliceId = peerId(alice.signPub);
       const badAllow = new Map([[aliceId, { id: aliceId, signPub: alice.signPub }]]);
-      await expect(
-        startHub({
-          mode: "tailscale",
-          host: "100.64.0.1",
-          path: VALID_PATH,
-          hubId: host.signPub,
-          allow: badAllow,
-          whois: { loginFor: async () => null },
-        }),
-      ).rejects.toThrow(RangeError);
+      const promise = startHub({
+        mode: "tailscale",
+        host: "100.64.0.1",
+        path: VALID_PATH,
+        hubId: host.signPub,
+        allow: badAllow,
+        whois: { loginFor: async () => null },
+      });
+      await expect(promise).rejects.toThrow(RangeError);
+      await expect(promise).rejects.toThrow(/tailscaleLogin/);
       expect(setIntervalSpy).not.toHaveBeenCalled();
     } finally {
       setIntervalSpy.mockRestore();
@@ -1090,6 +1093,11 @@ describe("hub: end-to-end wire", () => {
     const b = await authed(h, bob);
 
     const inner = maxLegalInner(alice, bob);
+    // Pin the size this test claims to exercise: seal() measures plaintext as
+    // utf8(JSON.stringify(parsed.data)).length (see envelope.ts), and
+    // InnerSchema neither reorders keys nor adds defaults, so this matches
+    // what seal() actually caps against.
+    expect(Buffer.byteLength(JSON.stringify(inner), "utf8")).toBe(MAX_PLAINTEXT_BYTES);
     const sealed = seal(inner, bob.boxPub, alice.boxSec);
     const frame = { type: "msg" as const, ref: "e2e-max", to: peerId(bob.signPub), ...sealed };
 
