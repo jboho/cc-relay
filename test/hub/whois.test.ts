@@ -106,13 +106,20 @@ describe("tailscaleWhois", () => {
   });
 
   test("still resolves null and throws nothing when execFile itself throws synchronously", async () => {
-    const onError = () => {
+    const throwingOnError = () => {
       throw new Error("onError boom");
     };
     // A NUL byte in the binary path makes Node's execFile throw synchronously
     // (ERR_INVALID_ARG_VALUE) before it ever reaches the callback.
     await expect(
+      tailscaleWhois({ bin: "bad\0bin", onError: throwingOnError }).loginFor("100.64.0.5", 1),
+    ).resolves.toBeNull();
+
+    const reasons: string[] = [];
+    const onError = (reason: string) => reasons.push(reason);
+    await expect(
       tailscaleWhois({ bin: "bad\0bin", onError }).loginFor("100.64.0.5", 1),
     ).resolves.toBeNull();
+    expect(reasons).toEqual([expect.stringMatching(/^whois 100\.64\.0\.5:1 failed: .+/)]);
   });
 });
