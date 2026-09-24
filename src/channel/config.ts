@@ -11,7 +11,6 @@ import {
   renameSync,
   rmSync,
   writeFileSync,
-  writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -133,26 +132,31 @@ export function ensureHome(home: string): void {
 }
 
 // Readers never see a half-written file: write a private temp file, then rename
-// over the target (atomic within one directory). Fsyncing the temp file before
-// the rename, and the directory after it, guards against a crash losing the
-// write or the rename's directory-entry update (no test: this only shows up
-// after a real crash/power loss, which nothing in this suite can simulate).
+// over the target (atomic within one directory). Flushing the temp file before
+// the rename, and fsyncing the directory after it, guards against a crash
+// losing the write or the rename's directory-entry update (no test: this only
+// shows up after a real crash/power loss, which nothing in this suite can
+// simulate). A short write can't be tested reliably either (it needs a full
+// disk or a quota mid-write), so it's covered by using writeFileSync's own
+// flush rather than a manual write loop: writeFileSync always writes the
+// entire buffer or throws, unlike a single writeSync call, which can return
+// having written fewer bytes than given and silently leave the rest off disk.
+// Probed against this repo's Node (22.13.1): writeFileSync's flush option is
+// supported and does write-then-fsync in one call, so there's no separate fd
+// to leak or double-close on the way out.
 export function writeJsonAtomic(path: string, value: unknown): void {
   checkPrivate(dirname(path), "cc-relay home", "directory");
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
-  let fd: number | undefined;
   try {
-    fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
-    writeSync(fd, `${JSON.stringify(value, null, 2)}\n`);
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = undefined;
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
     renameSync(tmp, path);
   } catch (err) {
-    if (fd !== undefined) closeSync(fd);
     rmSync(tmp, { force: true });
     throw err;
   }
+  // A plain fsync on macOS only reaches the drive's write cache, not the
+  // platter/NAND itself (that needs F_FULLFSYNC); this is best-effort
+  // durability against a process or OS crash, not against a power loss.
   const dirFd = openSync(dirname(path), fsConstants.O_RDONLY);
   try {
     fsyncSync(dirFd);
