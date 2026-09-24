@@ -96,7 +96,7 @@ describe("Router", () => {
     expect(b.sent).toHaveLength(RATE_LIMIT_PER_MIN + 1);
   });
 
-  test("the rate limit is per connection: one sender's budget doesn't throttle another, and a new connection starts fresh", () => {
+  test("the rate limit is per peer: one sender's budget doesn't throttle another, and reconnecting doesn't reset it", () => {
     const router = setup();
     const a = fakeConn(A);
     const b = fakeConn(B);
@@ -110,7 +110,7 @@ describe("Router", () => {
     const a2 = fakeConn(A);
     router.attach(a2.conn);
     router.route(a2.conn, msg(B, "fresh"));
-    expect(a2.sent).toEqual([{ type: "ack", ref: "fresh" }]);
+    expect(a2.sent).toEqual([{ type: "error", ref: "fresh", code: "rate_limited" }]);
   });
 
   test("rejected sends don't count toward the window", () => {

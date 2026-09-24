@@ -10,7 +10,7 @@ export class CardError extends Error {
 
 // Hostnames and IPv4 only: the guest builds ws://<host>:<port>/<path> from these,
 // so anything that could change the URL's structure is rejected here.
-const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;
+export const HOST_RE = /^[A-Za-z0-9.-]{1,253}$/;
 export const HUB_PATH_RE = /^[A-Za-z0-9_-]{22}$/;
 const MAX_CARD_CHARS = 2048;
 

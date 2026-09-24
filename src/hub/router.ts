@@ -12,7 +12,10 @@ const WINDOW_MS = 60_000;
 
 export class Router {
   private readonly conns = new Map<string, Conn>();
-  private readonly sendTimes = new WeakMap<Conn, number[]>();
+  // Keyed by peer ID, not by connection: a per-connection budget would reset
+  // every time a peer reconnects. Only allowlisted IDs ever authenticate, so
+  // this map is bounded by the allowlist.
+  private readonly sendTimes = new Map<string, number[]>();
 
   constructor(
     private readonly allow: ReadonlySet<string>,
@@ -58,8 +61,8 @@ export class Router {
 
   private allowSend(conn: Conn): boolean {
     const now = this.clock();
-    const recent = (this.sendTimes.get(conn) ?? []).filter((t) => now - t < WINDOW_MS);
-    this.sendTimes.set(conn, recent);
+    const recent = (this.sendTimes.get(conn.id) ?? []).filter((t) => now - t < WINDOW_MS);
+    this.sendTimes.set(conn.id, recent);
     if (recent.length >= RATE_LIMIT_PER_MIN) return false;
     recent.push(now);
     return true;

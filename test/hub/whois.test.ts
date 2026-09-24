@@ -80,4 +80,16 @@ describe("tailscaleWhois", () => {
     expect(await tailscaleWhois({ bin }).loginFor("::ffff:100.64.0.5", 1)).toBeNull();
     expect(await tailscaleWhois({ bin }).loginFor("", 1)).toBeNull();
   });
+
+  test("reports why a lookup failed through onError, and stays null", async () => {
+    const reasons: string[] = [];
+    const onError = (reason: string) => reasons.push(reason);
+    expect(await tailscaleWhois({ bin: fakeTailscale("exit 3"), onError }).loginFor("100.64.0.5", 1)).toBeNull();
+    expect(await tailscaleWhois({ bin: fakeTailscale("echo '{}'"), onError }).loginFor("100.64.0.5", 2)).toBeNull();
+    expect(await tailscaleWhois({ onError }).loginFor("::1", 3)).toBeNull();
+    expect(reasons).toHaveLength(3);
+    expect(reasons[0]).toMatch(/^whois 100\.64\.0\.5:1 failed: /);
+    expect(reasons[1]).toBe("whois 100.64.0.5:2 printed no login");
+    expect(reasons[2]).toMatch(/not an IPv4 address/);
+  });
 });
