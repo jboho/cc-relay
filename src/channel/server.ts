@@ -120,18 +120,28 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
   });
 
   async function deliver(frame: InboundFrame): Promise<void> {
-    const accepted = acceptInbound(frame, { selfId, selfBoxSec: deps.identity.boxSec, peers: byId, replay, now: deps.now() });
-    if (!accepted.ok) {
-      // Never log plaintext (R16); the sender id and reason are enough to debug.
-      deps.log(`cc-relay: dropped a message from ${frame.from.slice(0, 8)}…: ${accepted.reason}`);
-      return;
-    }
-    const decision = gate.admit();
-    if (decision === "deliver") {
-      await server.notification(channelNotification(accepted.peer.alias, accepted.message.id, accepted.message.text));
-    } else if (decision === "notice") {
-      deps.log("cc-relay: inbound rate limit reached; dropping messages");
-      await server.notification(rateLimitNotice());
+    // Callers drop this promise (`onMessage: (frame) => void deliver(frame)`),
+    // so a rejection here would become an unhandled rejection and crash the
+    // process. notification() can reject before connect/after the transport
+    // closes, and acceptInbound/gate.admit can throw on a non-finite clock;
+    // deliver must always resolve.
+    try {
+      const accepted = acceptInbound(frame, { selfId, selfBoxSec: deps.identity.boxSec, peers: byId, replay, now: deps.now() });
+      if (!accepted.ok) {
+        // Never log plaintext (R16); the sender id and reason are enough to debug.
+        deps.log(`cc-relay: dropped a message from ${frame.from.slice(0, 8)}…: ${accepted.reason}`);
+        return;
+      }
+      const decision = gate.admit();
+      if (decision === "deliver") {
+        await server.notification(channelNotification(accepted.peer.alias, accepted.message.id, accepted.message.text));
+      } else if (decision === "notice") {
+        deps.log("cc-relay: inbound rate limit reached; dropping messages");
+        await server.notification(rateLimitNotice());
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      deps.log(`cc-relay: could not deliver a message from ${frame.from.slice(0, 8)}…: ${detail}`);
     }
   }
 

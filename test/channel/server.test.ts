@@ -211,3 +211,53 @@ describe("inbound", () => {
     expect(notes.at(-1)?.meta).toEqual({ notice: "rate_limited" });
   });
 });
+
+describe("deliver never rejects", () => {
+  test("after the transport closes, deliver resolves and logs without the plaintext", async () => {
+    const { client, deliver, logs, notes } = await setup();
+    let unhandled: unknown;
+    const onUnhandled = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await client.close();
+      await expect(deliver(fromBob("secret text"))).resolves.toBeUndefined();
+      await settle();
+      expect(notes).toEqual([]);
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).not.toContain("secret text");
+      expect(logs[0]).toContain("Not connected");
+      expect(unhandled).toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  test("a non-finite clock makes acceptInbound throw; deliver still resolves and logs", async () => {
+    const logs: string[] = [];
+    const hub = { state: "ready" as const, send: async () => ({ ok: true as const }) };
+    const { deliver } = createChannelServer({
+      identity: alice,
+      peers: [bob],
+      hub,
+      launch: OK,
+      now: () => NaN,
+      log: (l) => logs.push(l),
+    });
+    let unhandled: unknown;
+    const onUnhandled = (err: unknown) => {
+      unhandled = err;
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await expect(deliver(fromBob("secret text"))).resolves.toBeUndefined();
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).not.toContain("secret text");
+      expect(logs[0]).toContain("RangeError");
+      expect(unhandled).toBeUndefined();
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+});
