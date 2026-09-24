@@ -35,7 +35,7 @@ Expected: alice lists `hub: loopback mode …` and peer bob; bob lists `linked t
 CC_RELAY_HOME=$HOME/.config/cc-relay-m4-alice cc-relay hub
 ```
 
-Expected: `cc-relay hub listening on 127.0.0.1:<port> (mode loopback, 1 peer)`. Back in tab 1, `CC_RELAY_HOME=$B cc-relay doctor` should show `PASS  hub: … accepted this machine's hello` and no FAIL lines. The `session` line is SKIP from a plain terminal.
+Expected: `cc-relay hub listening on 127.0.0.1:<port> (loopback mode, 1 peer)`. Back in tab 1, `CC_RELAY_HOME=$B cc-relay doctor` should show `PASS  hub: … accepted this machine's hello` and no FAIL lines. The `session` line is SKIP from a plain terminal.
 
 ## Sessions (tabs 3 and 4)
 

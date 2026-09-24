@@ -83,7 +83,7 @@ On the host, in a terminal tab you keep open:
 
 ```bash
 cc-relay hub
-# cc-relay hub listening on 192.168.1.20:20205 (mode lan, 1 peer)
+# cc-relay hub listening on 192.168.1.20:20205 (lan mode, 1 peer)
 ```
 
 On each machine (the host too, if the host person also chats):
@@ -100,7 +100,7 @@ Then ask Claude to message a peer by alias, for example "tell bob the build is g
 cc-relay doctor
 ```
 
-It checks, in order: the home folder is private (0700), the identity and peers load, `settings.json` asks before every send and turns bypass mode off, `mcp.json` points at this install, the clock is within a few seconds of `time.apple.com`, Tailscale is working (if used), the hub answers and accepts this machine, and (for a Tailscale guest) that the host's grant opens only the hub port. Each line says PASS, WARN, FAIL or SKIP, with what to do. It exits 1 if anything fails.
+It checks, in order: the home folder is private (0700), the identity and peers load, `settings.json` asks before every send and turns bypass mode off, `mcp.json` points at this install, this session (if run from one) was launched with the relay settings, the clock is within a few seconds of `time.apple.com`, Tailscale is working (if used), the hub answers and accepts this machine, and (for a Tailscale guest) that the host's grant opens only the hub port. Each line says PASS, WARN, FAIL or SKIP, with what to do. It exits 1 if anything fails.
 
 To check a running relay session, type `! cc-relay doctor` inside it. The `session` line then confirms that the session was started with the relay settings. From a plain terminal that line is skipped. From an ordinary Claude Code session it fails, which is correct: that session can't send.
 
