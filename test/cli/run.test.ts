@@ -257,29 +257,39 @@ describe("channel command", () => {
     await expect(channel(fakeIo(bobHome), { transport: InMemoryTransport.createLinkedPair()[0], ppid: 4242, lookup: launchedWith(null) })).rejects.toMatchObject({ code: "invalid" });
   });
 
-  test("stops when told to, and releases both the hub connection and the MCP session", async () => {
-    const { aliceHome, bobHome } = await pair();
-    const alice = await session(aliceHome);
-    const bob = await session(bobHome);
-    await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
+  test(
+    "stops when told to, and releases both the hub connection and the MCP session",
+    async () => {
+      const { aliceHome, bobHome } = await pair();
+      const alice = await session(aliceHome);
+      const bob = await session(bobHome);
+      await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
 
-    let mcpClosed = false;
-    bob.client.onclose = () => {
-      mcpClosed = true;
-    };
-    bob.io.stop();
-    expect(await bob.done).toBe(0);
+      let mcpClosed = false;
+      bob.client.onclose = () => {
+        mcpClosed = true;
+      };
+      bob.io.stop();
+      expect(await bob.done).toBe(0);
 
-    // Proves created.server.close() actually ran: the MCP session on bob's
-    // side closed too, not just channel()'s own promise resolving.
-    expect(mcpClosed).toBe(true);
+      // Proves created.server.close() actually ran: the MCP session on bob's
+      // side closed too, not just channel()'s own promise resolving.
+      expect(mcpClosed).toBe(true);
 
-    // Proves client.stop() actually ran: the hub's websocket to bob closed,
-    // so the hub now sees bob as offline instead of still routing to it.
-    const result = await retryUntil(
-      () => alice.call("send", { to: "bob", text: "are you still there?" }),
-      (text) => text.startsWith("offline: "),
-    );
-    expect(result).toMatch(/^offline: bob has no relay session connected$/);
-  });
+      // Proves client.stop() actually ran: the hub's websocket to bob closed,
+      // so the hub now sees bob as offline instead of still routing to it.
+      // Each attempt can take as long as the client's 10s ack timeout if the
+      // hub hasn't yet noticed bob's socket closed, so retryUntil needs more
+      // than its 3s default and this test needs more than vitest's 5s default
+      // -- otherwise vitest kills the test first and reports its own generic
+      // timeout instead of retryUntil's real "timed out" message.
+      const result = await retryUntil(
+        () => alice.call("send", { to: "bob", text: "are you still there?" }),
+        (text) => text.startsWith("offline: "),
+        15_000,
+      );
+      expect(result).toMatch(/^offline: bob has no relay session connected$/);
+    },
+    20_000,
+  );
 });
