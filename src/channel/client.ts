@@ -177,8 +177,24 @@ export class HubClient {
           return;
         }
         switch (frame.type) {
-          case "msg":
-            return this.opts.onMessage({ from: frame.from, ciphertext: frame.ciphertext, nonce: frame.nonce });
+          case "msg": {
+            // onMessage is caller-supplied app code, unlike everything above it
+            // (parseHubFrame, authFor, ws.send, ...), so it's caught on its own:
+            // a bug in the caller's handler is the caller's problem, not a broken
+            // hub connection, and shouldn't reset one - it's logged by name only
+            // (never the raw frame, which may carry ciphertext) and left at that.
+            try {
+              this.opts.onMessage({ from: frame.from, ciphertext: frame.ciphertext, nonce: frame.nonce });
+            } catch (err) {
+              const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+              try {
+                this.opts.log(`cc-relay: onMessage threw while handling a frame from the hub: ${detail}`);
+              } catch {
+                // log is untrusted too; swallow rather than risk a second throw.
+              }
+            }
+            return;
+          }
           case "ack":
           case "error": {
             const p = this.pending.get(frame.ref);
@@ -191,15 +207,13 @@ export class HubClient {
             return bail(`unexpected ${frame.type} after ready`);
         }
       } catch (err) {
-        // onMessage and log are caller-supplied and can throw arbitrary app code;
-        // an uncaught throw here kills the whole channel process, so it's caught
-        // and logged by name only - never the raw frame, which may carry ciphertext.
+        // Anything reaching here is a bug in this client's own code (parseHubFrame,
+        // authFor, ws.send, p.resolve, ...) or a malformed-but-schema-valid value from
+        // the hub, not the caller's onMessage - so it's treated like any other hub-side
+        // surprise: reset the connection right away with an accurate label, rather than
+        // mislabel it as "onMessage threw" and stall until the keepalive timer notices.
         const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
-        try {
-          this.opts.log(`cc-relay: onMessage threw while handling a frame from the hub: ${detail}`);
-        } catch {
-          // log is untrusted too; swallow rather than risk a second throw.
-        }
+        bail(`internal error handling hub frame: ${detail}`);
       }
     });
     ws.on("close", (code) => {

@@ -335,4 +335,23 @@ describe("HubClient with a throwing app callback", () => {
       process.off("uncaughtException", onUncaught);
     }
   });
+
+  test("an internal error in the client's own frame handling (not onMessage) resets the connection promptly with an accurate label", async () => {
+    // b64u() in frames.ts checks only the alphabet and length, so this passes the
+    // ChallengeFrame schema, but fromB64u (called inside authFor) also requires the
+    // canonical encoding and throws - a bug reachable from a real hub, not onMessage.
+    const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const canonical = toB64u(nacl.randomBytes(32));
+    const lastIndex = ALPHABET.indexOf(canonical.at(-1) as string);
+    const nonCanonical = canonical.slice(0, -1) + ALPHABET[lastIndex ^ 1];
+
+    const fake = await fakeHub({ onHello: (ws) => ws.send(JSON.stringify({ type: "challenge", nonce: nonCanonical })) });
+    const a = client(fake.url, alice, { backoffMinMs: 5, backoffMaxMs: 20 });
+    await waitFor(() => a.logs.some((l) => l.includes("internal error handling hub frame: EncodingError")));
+    expect(a.logs.some((l) => l.includes("onMessage threw"))).toBe(false);
+    // Confirms the connection was actually reset (bail -> terminate -> close ->
+    // reconnect), not just logged, and that it happened well before the 75s
+    // default keepalive timeout could have forced it.
+    await waitFor(() => fake.connections() >= 2);
+  });
 });
