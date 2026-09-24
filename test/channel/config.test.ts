@@ -80,6 +80,21 @@ describe("home and identity", () => {
     expect(codeOf(() => ensureHome(home))).toBe("permissions");
   });
 
+  test("ensureHome's message includes the errno code, and a file standing in for a parent directory is invalid, not permissions", () => {
+    const blocker = nextHome();
+    writeFileSync(blocker, "not a directory", { mode: 0o600 });
+    const home = `${blocker}/sub`;
+    let caught: unknown;
+    try {
+      ensureHome(home);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigError);
+    expect((caught as ConfigError).code).toBe("invalid");
+    expect((caught as Error).message).toContain("ENOTDIR");
+  });
+
   test("checkPrivate defaults to checking a directory when kind is omitted, for callers fixed to the old two-argument shape", () => {
     const home = nextHome();
     ensureHome(home);
@@ -87,6 +102,13 @@ describe("home and identity", () => {
     const file = nextHome();
     writeFileSync(file, "not a directory", { mode: 0o600 });
     expect(codeOf(() => checkPrivate(file, "x"))).toBe("invalid");
+  });
+
+  test("checkPrivate maps ENOTDIR (a path segment is a file, not the target itself) to invalid, not a raw error", () => {
+    const blocker = nextHome();
+    writeFileSync(blocker, "not a directory", { mode: 0o600 });
+    const nested = `${blocker}/sub`;
+    expect(codeOf(() => checkPrivate(nested, "x"))).toBe("invalid");
   });
 
   test("the identity is written 0600 and loads back", () => {
@@ -106,6 +128,16 @@ describe("home and identity", () => {
     const { home } = initHome();
     chmodSync(paths(home).identity, 0o640);
     expect(codeOf(() => loadIdentity(home))).toBe("permissions");
+  });
+
+  test("loading maps an unreadable-by-owner identity file to a permissions error, not a raw EACCES", () => {
+    const { home } = initHome();
+    chmodSync(paths(home).identity, 0o000);
+    try {
+      expect(codeOf(() => loadIdentity(home))).toBe("permissions");
+    } finally {
+      chmodSync(paths(home).identity, 0o600);
+    }
   });
 
   test("loading refuses a loosened home directory", () => {
@@ -135,6 +167,15 @@ describe("home and identity", () => {
     mkdirSync(home, { mode: 0o755 });
     chmodSync(home, 0o755);
     expect(codeOf(() => writeIdentity(home, generateIdentity("alice")))).toBe("permissions");
+  });
+
+  test("writeIdentity leaves no leftover temp file behind, whether it succeeds or an identity already exists", () => {
+    const home = nextHome();
+    ensureHome(home);
+    writeIdentity(home, generateIdentity("alice"));
+    expect(codeOf(() => writeIdentity(home, generateIdentity("mallory")))).toBe("exists");
+    const leftovers = readdirSync(home).filter((name) => name.includes(".tmp"));
+    expect(leftovers).toEqual([]);
   });
 });
 
@@ -194,11 +235,14 @@ describe("peers", () => {
     expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
   });
 
-  test("loading refuses a write-only peers file: checkPrivate passes but the read itself fails", () => {
+  test("loading refuses a write-only peers file: the mode bits look fine but this owner can't read it", () => {
     const { home, self } = initHome();
     chmodSync(paths(home).peers, 0o200);
-    expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
-    chmodSync(paths(home).peers, 0o600);
+    try {
+      expect(codeOf(() => loadPeers(home, self))).toBe("permissions");
+    } finally {
+      chmodSync(paths(home).peers, 0o600);
+    }
   });
 
   test("loading refuses a peers file that is a symlink, even to a private file outside the home", () => {

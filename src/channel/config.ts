@@ -1,5 +1,18 @@
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { z } from "zod";
@@ -53,38 +66,66 @@ function isErrno(err: unknown, code: string): boolean {
 // Known limitation: this checks POSIX mode bits only; macOS ACLs (see `ls -le`)
 // can grant access beyond the mode and are not inspected.
 // `kind` rejects a mismatched filesystem object (a directory standing in for a
-// config file, or vice versa) before anything tries to open it — a FIFO named
-// peers.json would otherwise hang readFileSync forever instead of failing fast.
+// config file, or vice versa) before anything tries to read it.
+//
+// Opens the path itself (rather than lstat-then-open) so a check and a
+// subsequent read can share one fd: a separate lstat followed by a later open
+// leaves a window where the path can be swapped for a symlink in between
+// (TOCTOU). O_NOFOLLOW makes that swap fail closed (ELOOP) instead of quietly
+// following it. O_NONBLOCK keeps a FIFO standing in for a config file from
+// hanging this open() forever waiting for a writer; it's ignored for regular
+// files and directories, so it has no effect on the common case.
+function openPrivate(path: string, what: string, kind: "directory" | "file"): number {
+  let fd: number;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (err) {
+    if (isErrno(err, "ENOENT")) throw new ConfigError(`${what} ${path} does not exist; run cc-relay init`, "missing", { cause: err });
+    if (isErrno(err, "ELOOP")) throw new ConfigError(`${what} ${path} is a symlink; refusing to follow it`, "permissions", { cause: err });
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not accessible`, "permissions", { cause: err });
+    if (isErrno(err, "ENOTDIR")) throw new ConfigError(`${what} ${path} is not accessible: a path segment is not a directory`, "invalid", { cause: err });
+    throw err;
+  }
+  try {
+    const st = fstatSync(fd);
+    const matches = kind === "directory" ? st.isDirectory() : st.isFile();
+    if (!matches) throw new ConfigError(`${what} ${path} is not a ${kind}`, "invalid");
+    if ((st.mode & 0o077) !== 0) {
+      throw new ConfigError(
+        `${what} ${path} is accessible by other users (mode ${(st.mode & 0o777).toString(8)}); run chmod go-rwx ${path}`,
+        "permissions",
+      );
+    }
+    // Belt-and-braces alongside the mode check above: a file this user doesn't
+    // own but happens to be readable some other way (e.g. an ACL, see the
+    // limitation noted above) shouldn't be trusted as this identity's own.
+    const uid = process.getuid?.();
+    if (uid !== undefined && st.uid !== uid) {
+      throw new ConfigError(`${what} ${path} is not owned by this user`, "permissions");
+    }
+    return fd;
+  } catch (err) {
+    closeSync(fd);
+    throw err;
+  }
+}
+
 // Defaults to "directory": doctor and other external callers still call this
 // with the pre-existing two-argument shape to check a home folder.
 export function checkPrivate(path: string, what: string, kind: "directory" | "file" = "directory"): void {
-  let mode: number;
-  try {
-    const st = lstatSync(path);
-    if (st.isSymbolicLink()) throw new ConfigError(`${what} ${path} is a symlink; refusing to follow it`, "permissions");
-    const matches = kind === "directory" ? st.isDirectory() : st.isFile();
-    if (!matches) throw new ConfigError(`${what} ${path} is not a ${kind}`, "invalid");
-    mode = st.mode;
-  } catch (err) {
-    if (err instanceof ConfigError) throw err;
-    if (isErrno(err, "ENOENT")) throw new ConfigError(`${what} ${path} does not exist; run cc-relay init`, "missing", { cause: err });
-    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not accessible`, "permissions", { cause: err });
-    throw err;
-  }
-  if ((mode & 0o077) !== 0) {
-    throw new ConfigError(
-      `${what} ${path} is accessible by other users (mode ${(mode & 0o777).toString(8)}); run chmod go-rwx ${path}`,
-      "permissions",
-    );
-  }
+  closeSync(openPrivate(path, what, kind));
 }
 
 export function ensureHome(home: string): void {
   try {
     mkdirSync(home, { recursive: true, mode: 0o700 });
   } catch (err) {
-    if (isErrno(err, "EACCES") || isErrno(err, "EPERM") || isErrno(err, "ENOTDIR")) {
-      throw new ConfigError(`cannot create cc-relay home ${home}`, "permissions", { cause: err });
+    const code = (err as NodeJS.ErrnoException).code;
+    if (isErrno(err, "ENOTDIR")) {
+      throw new ConfigError(`cannot create cc-relay home ${home}: a path segment is not a directory (${code})`, "invalid", { cause: err });
+    }
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) {
+      throw new ConfigError(`cannot create cc-relay home ${home} (${code})`, "permissions", { cause: err });
     }
     throw err;
   }
@@ -92,16 +133,31 @@ export function ensureHome(home: string): void {
 }
 
 // Readers never see a half-written file: write a private temp file, then rename
-// over the target (atomic within one directory).
+// over the target (atomic within one directory). Fsyncing the temp file before
+// the rename, and the directory after it, guards against a crash losing the
+// write or the rename's directory-entry update (no test: this only shows up
+// after a real crash/power loss, which nothing in this suite can simulate).
 export function writeJsonAtomic(path: string, value: unknown): void {
   checkPrivate(dirname(path), "cc-relay home", "directory");
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
+  let fd: number | undefined;
   try {
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    fd = openSync(tmp, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
+    writeSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = undefined;
     renameSync(tmp, path);
   } catch (err) {
+    if (fd !== undefined) closeSync(fd);
     rmSync(tmp, { force: true });
     throw err;
+  }
+  const dirFd = openSync(dirname(path), fsConstants.O_RDONLY);
+  try {
+    fsyncSync(dirFd);
+  } finally {
+    closeSync(dirFd);
   }
 }
 
@@ -116,21 +172,24 @@ function readJson(path: string, what: string): unknown | undefined {
     if (err instanceof ConfigError && err.code === "missing") return undefined;
     throw err;
   }
+  let fd: number;
   try {
-    checkPrivate(path, what, "file");
+    fd = openPrivate(path, what, "file");
   } catch (err) {
     if (err instanceof ConfigError && err.code === "missing") return undefined;
     throw err;
   }
-  // checkPrivate only inspects the mode bits; the read itself can still fail
-  // (e.g. a write-only file), so that failure gets its own "permissions" code
-  // rather than being mistaken for malformed JSON.
+  // Reading from the same fd that openPrivate validated (rather than a fresh
+  // readFileSync(path)) is what closes the TOCTOU window: nothing can swap the
+  // path for something else between the check and the read.
   let text: string;
   try {
-    text = readFileSync(path, "utf8");
+    text = readFileSync(fd, "utf8");
   } catch (err) {
     if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${what} ${path} is not readable`, "permissions", { cause: err });
     throw err;
+  } finally {
+    closeSync(fd);
   }
   try {
     return JSON.parse(text);
@@ -150,28 +209,38 @@ function parseWith<T>(schema: z.ZodType<T>, raw: unknown, path: string, what: st
 
 // ---- identity ----
 
+// Written via a temp file + linkSync rather than writeFileSync's "wx" flag:
+// linkSync's EEXIST is the same atomic create-if-not-exists guarantee (an
+// existing identity is never overwritten, so its secret keys can never be
+// silently lost), but leaves the write itself, and its fsync, off the final
+// path until the link succeeds.
 export function writeIdentity(home: string, identity: Identity): void {
   checkPrivate(home, "cc-relay home", "directory");
   const path = paths(home).identity;
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
-    // "wx": never overwrite an existing identity; losing the secret keys
-    // would silently break every peer's card.
-    writeFileSync(path, serializeIdentity(identity), { mode: 0o600, flag: "wx" });
+    writeFileSync(tmp, serializeIdentity(identity), { mode: 0o600, flag: "wx" });
+    linkSync(tmp, path);
   } catch (err) {
     if (isErrno(err, "EEXIST")) throw new ConfigError(`identity already exists at ${path}`, "exists", { cause: err });
     throw err;
+  } finally {
+    rmSync(tmp, { force: true });
   }
 }
 
 export function loadIdentity(home: string): Identity {
   const path = paths(home).identity;
   checkPrivate(home, "cc-relay home", "directory");
-  checkPrivate(path, "identity file", "file");
+  const fd = openPrivate(path, "identity file", "file");
   try {
-    return parseIdentity(readFileSync(path, "utf8"));
+    return parseIdentity(readFileSync(fd, "utf8"));
   } catch (err) {
     if (err instanceof IdentityError) throw new ConfigError(`${path}: ${err.message}`, "invalid", { cause: err });
+    if (isErrno(err, "EACCES") || isErrno(err, "EPERM")) throw new ConfigError(`${path} is not readable`, "permissions", { cause: err });
     throw err;
+  } finally {
+    closeSync(fd);
   }
 }
 
