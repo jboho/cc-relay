@@ -36,6 +36,20 @@ vi.mock("../../src/hub/tailscale.js", async (importOriginal) => {
 
 const nextHome = tempHomes("cli-main");
 
+// Listens on port 0 to let the OS pick one, then releases it, the same
+// pattern test/hub/port.test.ts uses -- a small window for another process
+// to grab it before the caller rebinds, but far safer than a hardcoded port.
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const port = (probe.address() as { port: number }).port;
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
 describe("main", () => {
   // Only one test below queues a mockRejectedValueOnce on resolveTailscale. If
   // that test failed before main(["hub"]) consumed it, the queued rejection
@@ -122,21 +136,25 @@ describe("main", () => {
 
   test("hub reports a port already in use as a setup error, not a stack trace", async () => {
     const home = nextHome();
+    // A free port picked at run time, not a hardcoded one: a fixed port can
+    // collide with another suite (e.g. the e2e hub) or a leftover process
+    // from a previous run.
+    const port = await freePort();
     await main(
-      ["init", "--alias", "alice", "--host", "--mode", "loopback", "--port", "23997", "--name", "127.0.0.1"],
+      ["init", "--alias", "alice", "--host", "--mode", "loopback", "--port", String(port), "--name", "127.0.0.1"],
       fakeIo(home),
     );
     const blocker = createServer();
     await new Promise<void>((resolve, reject) => {
       blocker.once("error", reject);
-      blocker.listen({ host: "127.0.0.1", port: 23997, exclusive: true }, () => resolve());
+      blocker.listen({ host: "127.0.0.1", port, exclusive: true }, () => resolve());
     });
     try {
       const io = fakeIo(home);
       expect(await main(["hub"], io)).toBe(1);
       expect(io.stderr).toHaveLength(1);
       expect(io.stderr[0]).toMatch(/^cc-relay: /);
-      expect(io.stderr[0]).toContain("23997");
+      expect(io.stderr[0]).toContain(String(port));
     } finally {
       await new Promise((resolve) => blocker.close(resolve));
     }
