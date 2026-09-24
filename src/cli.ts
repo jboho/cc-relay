@@ -49,5 +49,13 @@ const code = await main(argv, {
 });
 // A finished hub or channel may still hold stdin or timers open; the short
 // commands exit naturally so piped stdout (cc-relay card | pbcopy) is flushed.
-if (longRunning) process.exit(code);
-process.exitCode = code;
+// process.exit() for the long-running commands would otherwise race a
+// backed-up pipe: write() queues the data and returns before the OS has
+// necessarily accepted all of it, so exit() right after can truncate the
+// last line (e.g. "cc-relay hub stopped" | some-slow-reader). Waiting for
+// both write callbacks proves the data is out before the process tears down.
+if (longRunning) {
+  process.stdout.write("", () => process.stderr.write("", () => process.exit(code)));
+} else {
+  process.exitCode = code;
+}
