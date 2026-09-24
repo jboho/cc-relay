@@ -181,7 +181,10 @@ function readJson(path: string, what: string): unknown | undefined {
   }
   // Reading from the same fd that openPrivate validated (rather than a fresh
   // readFileSync(path)) is what closes the TOCTOU window: nothing can swap the
-  // path for something else between the check and the read.
+  // path for something else between the check and the read. Not covered by a
+  // test: exercising the race would need a second process swapping the path
+  // mid-syscall, which this suite has no way to simulate; reverting to
+  // readFileSync(path) here still passes every test in this file.
   let text: string;
   try {
     text = readFileSync(fd, "utf8");
@@ -212,8 +215,9 @@ function parseWith<T>(schema: z.ZodType<T>, raw: unknown, path: string, what: st
 // Written via a temp file + linkSync rather than writeFileSync's "wx" flag:
 // linkSync's EEXIST is the same atomic create-if-not-exists guarantee (an
 // existing identity is never overwritten, so its secret keys can never be
-// silently lost), but leaves the write itself, and its fsync, off the final
-// path until the link succeeds.
+// silently lost), but leaves the write itself off the final path until the
+// link succeeds. No fsync here (unlike writeJsonAtomic): out of scope for
+// this change.
 export function writeIdentity(home: string, identity: Identity): void {
   checkPrivate(home, "cc-relay home", "directory");
   const path = paths(home).identity;
@@ -234,6 +238,9 @@ export function loadIdentity(home: string): Identity {
   checkPrivate(home, "cc-relay home", "directory");
   const fd = openPrivate(path, "identity file", "file");
   try {
+    // Same TOCTOU-closing reasoning as readJson: read from the fd openPrivate
+    // just validated, not a fresh readFileSync(path). Not covered by a test,
+    // for the same reason (needs a concurrent process swapping the path).
     return parseIdentity(readFileSync(fd, "utf8"));
   } catch (err) {
     if (err instanceof IdentityError) throw new ConfigError(`${path}: ${err.message}`, "invalid", { cause: err });

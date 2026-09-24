@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   checkPrivate,
   ConfigError,
@@ -167,6 +167,23 @@ describe("home and identity", () => {
     mkdirSync(home, { mode: 0o755 });
     chmodSync(home, 0o755);
     expect(codeOf(() => writeIdentity(home, generateIdentity("alice")))).toBe("permissions");
+  });
+
+  test("a private, correctly-moded file or home owned by someone else is still refused", () => {
+    const { home } = initHome();
+    // In this sandbox the file's real owner IS this process's uid, so without
+    // spoofing getuid the ownership check would never fire (mode 0600 already
+    // passes). Spying on process.getuid is what actually exercises st.uid !==
+    // uid, for both the file check inside loadIdentity and the home check.
+    const realUid = process.getuid?.();
+    if (realUid === undefined) return;
+    const spy = vi.spyOn(process, "getuid").mockReturnValue(realUid + 1);
+    try {
+      expect(codeOf(() => loadIdentity(home))).toBe("permissions");
+      expect(codeOf(() => checkPrivate(home, "cc-relay home", "directory"))).toBe("permissions");
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("writeIdentity leaves no leftover temp file behind, whether it succeeds or an identity already exists", () => {
