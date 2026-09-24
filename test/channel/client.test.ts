@@ -242,6 +242,45 @@ describe("HubClient against a misbehaving hub", () => {
     expect(a.c.state).toBe("superseded");
   });
 
+  test("late events on a socket the client has already replaced don't reach the current connection", async () => {
+    const conns: WebSocket[] = [];
+    const fake = await fakeHub({
+      onReady: (ws) => conns.push(ws),
+      afterReady: (ws, frame) => {
+        // Only the second (current) connection gets an ack; the first is left
+        // hanging so a stray ack routed to it can't be mistaken for a real reply.
+        if (conns.indexOf(ws) === 1 && frame.type === "msg") ws.send(JSON.stringify({ type: "ack", ref: frame.ref }));
+      },
+    });
+    const a = client(fake.url, alice);
+    await waitFor(() => a.c.state === "ready");
+    const oldWs = (a.c as unknown as { ws: WebSocket }).ws;
+
+    oldWs.close();
+    await waitFor(() => a.c.state === "ready" && conns.length >= 2);
+    const newWs = (a.c as unknown as { ws: WebSocket }).ws;
+    expect(newWs).not.toBe(oldWs);
+
+    const pending = a.c.send(peerId(bob.signPub), SEALED);
+
+    // These are events arriving on the socket the client has already moved
+    // past: a frame that was in flight when the reconnect happened, and a
+    // duplicate close/error the old socket fires afterward. Without the
+    // per-socket guards, they'd be handled as if they came from the live
+    // connection - resolving the wrong pending send and flipping a healthy
+    // client back to "connecting".
+    const emit = (ws: WebSocket, event: string, ...args: unknown[]) =>
+      (ws as unknown as { emit: (e: string, ...a: unknown[]) => void }).emit(event, ...args);
+    emit(oldWs, "message", Buffer.from(JSON.stringify({ type: "error", ref: "s0", code: "unknown_peer" })), false);
+    emit(oldWs, "close", 1000);
+    emit(oldWs, "error", new Error("late error from a socket we've already replaced"));
+
+    expect(a.c.state).toBe("ready");
+    expect(a.logs.some((l) => l.includes("late error from a socket"))).toBe(false);
+    expect(await pending).toEqual({ ok: true });
+    expect(a.c.state).toBe("ready");
+  });
+
   test("a second start() call is a no-op, not a second live connection", async () => {
     const fake = await fakeHub();
     const a = client(fake.url, alice);
