@@ -1,5 +1,6 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import { type ChildProcessByStdio, execFileSync, spawn } from "node:child_process";
 import { resolve } from "node:path";
+import type { Readable } from "node:stream";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
@@ -27,7 +28,12 @@ async function waitFor(check: () => boolean, ms = 5000): Promise<void> {
 
 function cli(home: string, ...args: string[]): { status: number; stdout: string; stderr: string } {
   try {
-    const stdout = execFileSync(process.execPath, [CLI, ...args], { env: { ...process.env, CC_RELAY_HOME: home }, encoding: "utf8", stdio: "pipe" });
+    const stdout = execFileSync(process.execPath, [CLI, ...args], {
+      env: { ...process.env, CC_RELAY_HOME: home },
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: 20_000,
+    });
     return { status: 0, stdout, stderr: "" };
   } catch (err) {
     const e = err as { status: number; stdout: string; stderr: string };
@@ -46,8 +52,27 @@ function exchange(from: string, to: string): void {
   expect(cli(to, "add", cardText, "--confirm", fp ?? "").status).toBe(0);
 }
 
-function startHub(home: string): Promise<ChildProcess> {
-  const proc = spawn(process.execPath, [CLI, "hub"], { env: { ...process.env, CC_RELAY_HOME: home }, stdio: ["ignore", "pipe", "pipe"] });
+// The hub's stdout/stderr on top of the ChildProcess: `out` and `err`
+// accumulate everything printed so far, and `stopped` resolves once the
+// process actually exits, with its exit code and final stdout -- used by the
+// "stops cleanly" assertion below without adding another spawn helper.
+interface Hub extends ChildProcessByStdio<null, Readable, Readable> {
+  out: () => string;
+  err: () => string;
+  stopped: Promise<{ code: number | null; stdout: string }>;
+}
+
+function startHub(home: string): Promise<Hub> {
+  const proc = spawn(process.execPath, [CLI, "hub"], { env: { ...process.env, CC_RELAY_HOME: home }, stdio: ["ignore", "pipe", "pipe"] }) as Hub;
+  let out = "";
+  let err = "";
+  proc.out = () => out;
+  proc.err = () => err;
+  // stderr is piped but must be drained regardless of whether anything ever
+  // reads it, or the hub can block writing to a full pipe; keeping it around
+  // also means a startup failure's diagnostics aren't silently dropped.
+  proc.stderr.on("data", (d: Buffer) => (err += d.toString()));
+  proc.stopped = new Promise((resolve) => proc.once("exit", (code) => resolve({ code, stdout: out })));
   cleanup.push(
     () =>
       new Promise<void>((done) => {
@@ -58,9 +83,12 @@ function startHub(home: string): Promise<ChildProcess> {
   );
   return new Promise((ready, fail) => {
     proc.stdout.on("data", (d: Buffer) => {
-      if (d.toString().includes("listening")) ready(proc);
+      out += d.toString();
+      // Checked against the accumulated buffer, not the chunk that just came
+      // in: "listening" can straddle two chunks under a small pipe buffer.
+      if (out.includes("listening")) ready(proc);
     });
-    proc.once("exit", (code) => fail(new Error(`hub exited ${code}`)));
+    proc.once("exit", (code) => fail(new Error(`hub exited ${code} before it started listening\nstderr:\n${err}`)));
   });
 }
 
@@ -87,8 +115,14 @@ async function session(home: string, { withSettings = true } = {}): Promise<Sess
   client.setNotificationHandler(z.object({ method: z.literal("notifications/claude/channel"), params: z.any() }), (n) => {
     notes.push(n.params);
   });
-  await client.connect(transport);
+  // Pushed before connect(): client.close() is a safe no-op if connect()
+  // never finishes (it guards on the transport having actually spawned), but
+  // if it's pushed only after a successful connect and the test throws first
+  // -- or connect() itself hangs or rejects -- this session's fixture (and
+  // the real channel process under it) is never cleaned up, and the next
+  // test's session for the same identity fails with "superseded".
   cleanup.push(() => client.close());
+  await client.connect(transport);
   const send = async (to: string, text: string) => {
     const r = (await client.callTool({ name: "send", arguments: { to, text } })) as { content: { text: string }[] };
     return r.content[0]?.text ?? "";
@@ -101,7 +135,10 @@ let hostHome: string;
 let guestHome: string;
 
 beforeAll(() => {
-  execFileSync(process.execPath, [resolve(ROOT, "node_modules/typescript/bin/tsc"), "-p", resolve(ROOT, "tsconfig.json")], { stdio: "inherit" });
+  execFileSync(process.execPath, [resolve(ROOT, "node_modules/typescript/bin/tsc"), "-p", resolve(ROOT, "tsconfig.json")], {
+    stdio: "inherit",
+    timeout: 20_000,
+  });
   hostHome = nextHome();
   guestHome = nextHome();
   expect(cli(hostHome, "init", "--alias", "alice", "--host", "--mode", "loopback").status).toBe(0);
@@ -133,6 +170,9 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
     expect(await bob.send("alice", "sneaky")).toMatch(/^blocked: /);
     expect(await alice.send("bob", "you can still hear me")).toBe("sent");
     await waitFor(() => bob.notes.length === 1);
+    // Not a race: bob's blocked send fails in the channel's own launch check
+    // (src/channel/server.ts) before it ever calls hub.send, so nothing
+    // reaches the wire for alice to receive, regardless of timing.
     expect(alice.notes).toEqual([]);
   }, 30_000);
 
@@ -151,7 +191,33 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
       }
     };
     await waitFor(() => !alive());
+    // The fixture prints this once the real channel process (CHANNEL_PID
+    // above) has actually exited; confirms a clean shutdown, not a signal kill.
+    expect(bob.stderr()).toContain("CHANNEL_EXIT 0");
   }, 30_000);
+
+  test("stopping the hub with SIGTERM makes it exit 0 and announce it on stdout", async () => {
+    const hubProc = await startHub(hostHome);
+    // Known race in src/cli/run.ts's hub(): it writes the "listening" line
+    // (io.out) before registering the SIGINT/SIGTERM handler (io.until()),
+    // and that write goes out over a pipe. A SIGTERM sent in the same instant
+    // this test observes "listening" can reach the process before the handler
+    // is installed, killing it via the OS's default disposition (code: null,
+    // signal: SIGTERM) instead of the graceful stop below -- reproduced
+    // outside this suite entirely (a bare spawn+kill loop against dist/cli.js,
+    // no vitest involved) at ~90% with a zero-delay kill, and even a minimal,
+    // unrelated script that only prints then registers once("SIGTERM", ...)
+    // shows the same failure mode at ~17%, so this isn't specific to this
+    // test's construction. The same probe never failed once in 30 runs at a
+    // 5ms delay; 20ms is used here for margin. This delay is a deliberate
+    // accommodation for that src/ race, not a fix for it -- flagged for the
+    // src/ owner rather than patched here.
+    await new Promise((r) => setTimeout(r, 20));
+    hubProc.kill("SIGTERM");
+    const { code, stdout } = await hubProc.stopped;
+    expect(code).toBe(0);
+    expect(stdout).toContain("cc-relay hub stopped");
+  }, 15_000);
 
   test("doctor passes on both machines while the hub runs", async () => {
     await startHub(hostHome);
