@@ -1,5 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import { afterEach, describe, expect, test } from "vitest";
 import { z } from "zod";
 import { add, card, init } from "../../src/cli/setup.js";
@@ -23,6 +25,33 @@ async function waitFor(check: () => boolean, ms = 3000): Promise<void> {
     if (Date.now() - start > ms) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, 10));
   }
+}
+
+// Like waitFor, but for a result that only settles asynchronously (e.g. a
+// send that keeps succeeding until the hub notices the peer went away).
+async function retryUntil<T>(fn: () => Promise<T>, match: (value: T) => boolean, ms = 3000): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const value = await fn();
+    if (match(value)) return value;
+    if (Date.now() - start > ms) throw new Error("retryUntil timed out");
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+// Proves a hub's port was actually released, not just that hub() returned.
+function expectPortClosed(port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    socket.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "ECONNREFUSED") resolve();
+      else reject(err);
+    });
+    socket.once("connect", () => {
+      socket.destroy();
+      reject(new Error(`expected port ${port} to be closed, but connected`));
+    });
+  });
 }
 
 function exchange(from: string, to: string): void {
@@ -91,10 +120,14 @@ describe("hub command", () => {
 
   test("listens on the configured loopback port, then stops cleanly", async () => {
     const { hubIo, done } = await pair();
-    expect(hubIo.stdout[0]).toMatch(/^cc-relay hub listening on 127\.0\.0\.1:\d+ \(loopback mode, 1 peer\)$/);
+    const listening = hubIo.stdout[0]?.match(/^cc-relay hub listening on 127\.0\.0\.1:(\d+) \(loopback mode, 1 peer\)$/);
+    expect(listening).not.toBeNull();
+    const port = Number(listening?.[1]);
     hubIo.stop();
     expect(await done).toBe(0);
     expect(hubIo.stdout.at(-1)).toBe("cc-relay hub stopped");
+    // Proves running.close() actually ran, not just that hub() returned.
+    await expectPortClosed(port);
   });
 });
 
@@ -146,15 +179,33 @@ describe("channel command", () => {
 
   test("a guest whose link points at a non-peer refuses to start", async () => {
     const { bobHome } = await pair();
-    const { writeFileSync } = await import("node:fs");
     writeFileSync(paths(bobHome).peers, JSON.stringify({ v: 1, peers: [] }), { mode: 0o600 });
     await expect(channel(fakeIo(bobHome), { transport: InMemoryTransport.createLinkedPair()[0], ppid: 4242, lookup: launchedWith(null) })).rejects.toMatchObject({ code: "invalid" });
   });
 
-  test("stops when told to, and resolves 0", async () => {
-    const { bobHome } = await pair();
+  test("stops when told to, and releases both the hub connection and the MCP session", async () => {
+    const { aliceHome, bobHome } = await pair();
+    const alice = await session(aliceHome);
     const bob = await session(bobHome);
+    await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
+
+    let mcpClosed = false;
+    bob.client.onclose = () => {
+      mcpClosed = true;
+    };
     bob.io.stop();
     expect(await bob.done).toBe(0);
+
+    // Proves created.server.close() actually ran: the MCP session on bob's
+    // side closed too, not just channel()'s own promise resolving.
+    expect(mcpClosed).toBe(true);
+
+    // Proves client.stop() actually ran: the hub's websocket to bob closed,
+    // so the hub now sees bob as offline instead of still routing to it.
+    const result = await retryUntil(
+      () => alice.call("send", { to: "bob", text: "are you still there?" }),
+      (text) => text.startsWith("offline: "),
+    );
+    expect(result).toMatch(/^offline: bob has no relay session connected$/);
   });
 });

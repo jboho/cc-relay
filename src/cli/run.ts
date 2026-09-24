@@ -3,7 +3,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { type Interfaces, resolveBindHost } from "../hub/netif.js";
 import { startHub } from "../hub/server.js";
 import { resolveTailscale } from "../hub/tailscale.js";
-import { tailscaleWhois } from "../hub/whois.js";
+import { tailscaleWhois, type Whois } from "../hub/whois.js";
 import { HubClient } from "../channel/client.js";
 import { ConfigError, hubAllow, loadHub, loadIdentity, loadPeers, paths, relayHome, resolveEndpoint } from "../channel/config.js";
 import { checkThisSession, type ProcLookup } from "../channel/launch.js";
@@ -25,7 +25,7 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
     ...(config.iface !== undefined ? { iface: config.iface } : {}),
     ...(deps.interfaces ? { interfaces: deps.interfaces } : {}),
   });
-  let whois;
+  let whois: Whois | undefined;
   if (config.mode === "tailscale") {
     const { bin } = await resolveTailscale();
     whois = tailscaleWhois({ bin, onError: (why) => io.err(`cc-relay hub: ${why}`) });
@@ -40,8 +40,11 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
     ...(whois ? { whois } : {}),
   });
   io.out(`cc-relay hub listening on ${host}:${running.port} (${config.mode} mode, ${peers.length} peer${peers.length === 1 ? "" : "s"})`);
-  await io.until();
-  await running.close();
+  try {
+    await io.until();
+  } finally {
+    await running.close();
+  }
   io.out("cc-relay hub stopped");
   return 0;
 }
@@ -69,6 +72,8 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
   const launch = checkThisSession(deps.ppid ?? process.ppid, deps.lookup);
   if (!launch.ok) io.err(`cc-relay: send is blocked: ${launch.reason}`);
 
+  // Replaced by created.deliver below, before client.start() begins passing
+  // inbound frames through onMessage; no frame can reach this placeholder.
   let deliver: (frame: InboundFrame) => Promise<void> = async () => {};
   const client = new HubClient({
     url: endpoint.url,
@@ -81,8 +86,11 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
   deliver = created.deliver;
   await created.server.connect(deps.transport ?? new StdioServerTransport());
   client.start();
-  await io.until();
-  client.stop();
-  await created.server.close();
+  try {
+    await io.until();
+  } finally {
+    client.stop();
+    await created.server.close();
+  }
   return 0;
 }
