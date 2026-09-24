@@ -1,6 +1,7 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
+  checkPrivate,
   ConfigError,
   ensureHome,
   hubAllow,
@@ -77,6 +78,15 @@ describe("home and identity", () => {
     mkdirSync(home, { mode: 0o755 });
     chmodSync(home, 0o755);
     expect(codeOf(() => ensureHome(home))).toBe("permissions");
+  });
+
+  test("checkPrivate defaults to checking a directory when kind is omitted, for callers fixed to the old two-argument shape", () => {
+    const home = nextHome();
+    ensureHome(home);
+    expect(() => checkPrivate(home, "x")).not.toThrow();
+    const file = nextHome();
+    writeFileSync(file, "not a directory", { mode: 0o600 });
+    expect(codeOf(() => checkPrivate(file, "x"))).toBe("invalid");
   });
 
   test("the identity is written 0600 and loads back", () => {

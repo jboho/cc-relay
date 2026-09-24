@@ -55,7 +55,9 @@ function isErrno(err: unknown, code: string): boolean {
 // `kind` rejects a mismatched filesystem object (a directory standing in for a
 // config file, or vice versa) before anything tries to open it — a FIFO named
 // peers.json would otherwise hang readFileSync forever instead of failing fast.
-export function checkPrivate(path: string, what: string, kind: "directory" | "file"): void {
+// Defaults to "directory": doctor and other external callers still call this
+// with the pre-existing two-argument shape to check a home folder.
+export function checkPrivate(path: string, what: string, kind: "directory" | "file" = "directory"): void {
   let mode: number;
   try {
     const st = lstatSync(path);
