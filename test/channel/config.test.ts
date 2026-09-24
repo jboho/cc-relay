@@ -298,6 +298,7 @@ describe("peers", () => {
     }
     expect(message).not.toMatch(/run cc-relay init\b/);
     expect(message).toMatch(/peers file .* does not exist/);
+    expect(message).toMatch(/chmod 600/);
   });
 
   test("saving peers refuses a loosened home directory", () => {
@@ -452,7 +453,7 @@ describe("hub, link, and endpoint", () => {
     }
     expect(message).toMatch(/no hub configured/);
     expect(message).not.toMatch(/init --host/);
-    expect(message).toMatch(/add <host card>/);
+    expect(message).toMatch(/add a host's card with cc-relay add <card>/);
   });
 
   test("no hub or link is missing; both at once is invalid", () => {

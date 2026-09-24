@@ -49,7 +49,7 @@ export async function hub(io: Io, deps: HubDeps = {}): Promise<number> {
   const config = loadHub(home);
   if (!config) {
     throw new ConfigError(
-      `this machine was set up as a guest (${paths(home).hub} is missing): the hub runs on the host machine, not here`,
+      `this machine isn't a hub host (${paths(home).hub} is missing); the hub runs on the host machine`,
       "missing",
     );
   }

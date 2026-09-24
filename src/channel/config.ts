@@ -331,7 +331,7 @@ export function loadPeers(home: string, self: Identity): StoredPeer[] {
   // behavior once such a file is in place.
   if (raw === undefined) {
     throw new ConfigError(
-      `peers file ${path} does not exist; if this machine is otherwise set up, recreate it as an empty list (write {"v":1,"peers":[]} to that path, mode 600) and re-add your peers with cc-relay add`,
+      `peers file ${path} does not exist; if this machine is otherwise set up, recreate it as an empty list (write {"v":1,"peers":[]} to that path, then chmod 600 it) and re-add your peers with cc-relay add`,
       "missing",
     );
   }
@@ -494,6 +494,6 @@ export function resolveEndpoint(
   }
   // Not "run cc-relay init --host": self was already loaded above, so this
   // identity exists, and init refuses once identity.json is already there.
-  // Adding a host's card is the only path that actually works from here.
-  throw new ConfigError("no hub configured: this identity already exists, so init can't set one up now; run `cc-relay add <host card>`", "missing");
+  // Say what to do (add a host's card), not why init would refuse.
+  throw new ConfigError("no hub configured: add a host's card with cc-relay add <card>", "missing");
 }

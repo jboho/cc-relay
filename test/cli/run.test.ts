@@ -115,7 +115,7 @@ async function session(home: string, settings: string | null = paths(home).setti
 }
 
 describe("hub command", () => {
-  test("refuses to start without a hub config, and says this machine is a guest rather than pointing at init", async () => {
+  test("refuses to start without a hub config, and says this machine isn't a hub host rather than pointing at init", async () => {
     const home = nextHome();
     await init(fakeIo(home), { alias: "bob" });
     let caught: unknown;
@@ -126,7 +126,7 @@ describe("hub command", () => {
     }
     expect(caught).toMatchObject({ code: "missing" });
     const message = (caught as Error).message;
-    expect(message).toMatch(/set up as a guest/);
+    expect(message).toMatch(/isn't a hub host/);
     expect(message).toMatch(/hub runs on the host machine/);
     expect(message).not.toMatch(/init --host/);
   });

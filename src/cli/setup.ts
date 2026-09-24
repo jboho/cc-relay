@@ -240,9 +240,8 @@ export function list(io: Io): number {
   else if (link) io.out(`linked to ${peers.find((p) => p.id === link.hubId)?.alias ?? "an unknown peer"}'s hub at ${link.host}:${link.port} via ${link.via}`);
   // Not "run cc-relay init --host": init refuses once identity.json exists
   // (setup.ts's init()), and list() only runs once an identity does, so that
-  // suggestion would always refuse. Adding a host's card is the only path
-  // that actually works from here.
-  else io.out("no hub: this machine wasn't set up as a host, and init can't turn it into one now that its identity exists; add a host's card instead");
+  // suggestion would always refuse. Say what to do, not why init would refuse.
+  else io.out("no hub or link yet: add a host's card with cc-relay add <card>");
   if (peers.length === 0) io.out("no peers yet");
   for (const p of peers) {
     io.out(`${p.alias}  ${fingerprint(p.signPub, p.boxPub)}${p.tailscaleLogin ? `  ${p.tailscaleLogin}` : ""}`);

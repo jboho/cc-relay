@@ -402,7 +402,7 @@ describe("remove and list", () => {
     expect(list(io)).toBe(0);
     expect(io.stdout[1]).toMatch(/no hub/);
     expect(io.stdout[1]).not.toMatch(/init --host/);
-    expect(io.stdout[1]).toMatch(/add a host's card/);
+    expect(io.stdout[1]).toMatch(/add a host's card with cc-relay add <card>/);
   });
 
   test("list shows you, your role and each peer's fingerprint", async () => {
