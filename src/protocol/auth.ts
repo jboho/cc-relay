@@ -3,6 +3,7 @@ import { concatBytes, u64be, utf8 } from "./encoding.js";
 import type { Identity } from "./identity.js";
 
 export const NONCE_BYTES = 32;
+export const SIG_BYTES = nacl.sign.signatureLength;
 
 // Domain-separation tags keep a hello signature from ever verifying as a
 // challenge signature (or anything else signed with the same key). The NUL ends

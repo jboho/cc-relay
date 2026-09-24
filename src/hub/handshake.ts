@@ -1,5 +1,5 @@
 import nacl from "tweetnacl";
-import { NONCE_BYTES, verifyChallenge, verifyHello } from "../protocol/auth.js";
+import { NONCE_BYTES, SIG_BYTES, verifyChallenge, verifyHello } from "../protocol/auth.js";
 import { fromB64u, toB64u } from "../protocol/encoding.js";
 import type { AuthFrame, HelloFrame } from "../protocol/frames.js";
 import type { ReplayGuard } from "../protocol/replay.js";
@@ -70,7 +70,7 @@ export class Handshake {
     let sig: Uint8Array;
     try {
       nonce = fromB64u(frame.nonce, NONCE_BYTES);
-      sig = fromB64u(frame.sig, 64);
+      sig = fromB64u(frame.sig, SIG_BYTES);
     } catch {
       return this.fail();
     }
@@ -113,7 +113,7 @@ export class Handshake {
     this.challenge = undefined;
     let sig: Uint8Array;
     try {
-      sig = fromB64u(frame.sig, 64);
+      sig = fromB64u(frame.sig, SIG_BYTES);
     } catch {
       return this.fail();
     }

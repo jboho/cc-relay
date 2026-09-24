@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   challengeMessage,
   helloMessage,
+  SIG_BYTES,
   signChallenge,
   signHello,
   verifyChallenge,
@@ -79,5 +80,11 @@ describe("challenge", () => {
       concatBytes(utf8("cc-relay/challenge/v1\0"), hub.signPub, nonce),
     );
     expect(challengeMessage(hub.signPub, nonce)).toHaveLength(86);
+  });
+
+  test("SIG_BYTES matches the actual length of a real detached signature", () => {
+    expect(SIG_BYTES).toBe(64);
+    expect(signHello(client, hub.signPub, ts, nonce)).toHaveLength(SIG_BYTES);
+    expect(signChallenge(client, hub.signPub, nonce)).toHaveLength(SIG_BYTES);
   });
 });
