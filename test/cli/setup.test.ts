@@ -1,9 +1,20 @@
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { add, card, init, list, remove } from "../../src/cli/setup.js";
 import { UsageError } from "../../src/cli/io.js";
 import { checkLaunch } from "../../src/channel/launch.js";
-import { ConfigError, loadHub, loadIdentity, loadLink, loadPeers, paths } from "../../src/channel/config.js";
+import {
+  ConfigError,
+  ensureHome,
+  loadHub,
+  loadIdentity,
+  loadLink,
+  loadPeers,
+  makePeer,
+  paths,
+  saveHub,
+  savePeers,
+} from "../../src/channel/config.js";
 import { decodeCard, encodeCard, fingerprint } from "../../src/protocol/card.js";
 import { generateIdentity } from "../../src/protocol/identity.js";
 import { tempHomes } from "../channel/helpers.js";
@@ -60,15 +71,49 @@ describe("init", () => {
 
   test("bad input fails before anything is written, so a corrected re-run works", async () => {
     const home = nextHome();
+    const p = paths(home);
     await expect(init(fakeIo(home), { alias: "alice", host: true, mode: "loopback", name: "evil/host" })).rejects.toBeInstanceOf(ConfigError);
     await expect(init(fakeIo(home), { alias: "Not Valid" })).rejects.toThrow();
     await expect(init(fakeIo(home), { alias: "alice", host: true, mode: "tailscale" })).rejects.toBeInstanceOf(UsageError);
     expect(() => loadIdentity(home)).toThrow(expect.objectContaining({ code: "missing" }));
+    for (const f of [p.peers, p.settings, p.mcp, p.hub]) expect(existsSync(f)).toBe(false);
     expect(await init(fakeIo(home), { alias: "alice" })).toBe(0);
   });
 
   test("hub options without --host are a usage error", async () => {
     await expect(init(fakeIo(nextHome()), { alias: "alice", mode: "lan" })).rejects.toBeInstanceOf(UsageError);
+  });
+
+  test("a leftover peers.json from a run that failed before the identity was written does not block a retry", async () => {
+    const home = nextHome();
+    ensureHome(home);
+    savePeers(home, generateIdentity("placeholder"), []);
+    expect(await init(fakeIo(home), { alias: "alice" })).toBe(0);
+    expect(loadIdentity(home).alias).toBe("alice");
+  });
+
+  test("a leftover peers.json with a stored peer survives a retry", async () => {
+    const home = nextHome();
+    ensureHome(home);
+    const bob = generateIdentity("bob");
+    savePeers(home, generateIdentity("placeholder"), [makePeer({ ...bob, alias: "bob" })]);
+    expect(await init(fakeIo(home), { alias: "alice" })).toBe(0);
+    expect(loadPeers(home, loadIdentity(home)).map((p) => p.alias)).toEqual(["bob"]);
+  });
+
+  test("a leftover hub.json from an earlier failed --host attempt is removed by a plain init", async () => {
+    const home = nextHome();
+    ensureHome(home);
+    saveHub(home, { v: 1, mode: "loopback", port: 20005, path: "A".repeat(22), name: "127.0.0.1" });
+    expect(await init(fakeIo(home), { alias: "alice" })).toBe(0);
+    expect(loadHub(home)).toBeUndefined();
+  });
+
+  test("a malformed --tailscale-login on a host is refused by the hub schema before any write", async () => {
+    const home = nextHome();
+    const p = paths(home);
+    await expect(init(fakeIo(home), { alias: "alice", host: true, mode: "loopback", tailscaleLogin: "a b" })).rejects.toBeInstanceOf(ConfigError);
+    for (const f of [p.identity, p.peers, p.settings, p.mcp, p.hub]) expect(existsSync(f)).toBe(false);
   });
 });
 
@@ -192,6 +237,29 @@ describe("add", () => {
     expect(() => add(fakeIo(host.home), { card: c.text, confirm: c.fp })).toThrow(ConfigError);
     const own = cardOf(host.home);
     expect(() => add(fakeIo(host.home), { card: own.text, confirm: own.fp })).toThrow(ConfigError);
+  });
+
+  test("a malformed --tailscale-login is refused by the peers schema, and list keeps working", async () => {
+    const host = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const c = cardOf(host.home);
+    expect(() => add(fakeIo(guest.home), { card: c.text, confirm: c.fp, tailscaleLogin: "a b" })).toThrow(ConfigError);
+    expect(loadPeers(guest.home, loadIdentity(guest.home))).toEqual([]);
+    const io = fakeIo(guest.home);
+    expect(list(io)).toBe(0);
+  });
+
+  test("--via lan on a card offering only tailscale is refused", async () => {
+    const guest = await fresh("bob");
+    const other = generateIdentity("alice");
+    const text = encodeCard({
+      alias: "alice",
+      signPub: other.signPub,
+      boxPub: other.boxPub,
+      hub: { tailscale: "100.64.0.9", port: 21000, path: "P".repeat(22) },
+    });
+    const fp = fingerprint(other.signPub, other.boxPub);
+    expect(() => add(fakeIo(guest.home), { card: text, confirm: fp, via: "lan" })).toThrow(/lan address/);
   });
 });
 

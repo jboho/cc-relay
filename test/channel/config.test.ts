@@ -168,6 +168,14 @@ describe("peers", () => {
     expect(codeOf(() => savePeers(home, self, many))).toBe("invalid");
   });
 
+  test("savePeers refuses a malformed tailscaleLogin before writing, leaving the file untouched", () => {
+    const { home, self } = initHome();
+    const bob = generateIdentity("bob");
+    const before = readFileSync(paths(home).peers, "utf8");
+    expect(codeOf(() => savePeers(home, self, [makePeer({ ...bob, alias: "bob", tailscaleLogin: "a b" })]))).toBe("invalid");
+    expect(readFileSync(paths(home).peers, "utf8")).toBe(before);
+  });
+
   test("a hand-edited peers.json is validated on load", () => {
     const { home, self } = initHome();
     const bob = generateIdentity("bob");

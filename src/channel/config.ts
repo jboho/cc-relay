@@ -242,15 +242,21 @@ export function loadPeers(home: string, self: Identity): StoredPeer[] {
 
 export function savePeers(home: string, self: Identity, peers: readonly StoredPeer[]): void {
   checkPeers(self, peers);
-  writeJsonAtomic(paths(home).peers, {
-    v: 1,
+  const path = paths(home).peers;
+  const file = {
+    v: 1 as const,
     peers: peers.map((p) => ({
       alias: p.alias,
       signPub: toB64u(p.signPub),
       boxPub: toB64u(p.boxPub),
       ...(p.tailscaleLogin !== undefined ? { tailscaleLogin: p.tailscaleLogin } : {}),
     })),
-  });
+  };
+  // Run the same schema loadPeers enforces on read, here before the write, so a
+  // field that only makePeer's caller could get wrong (e.g. a tailscaleLogin
+  // with whitespace) throws "invalid" instead of landing on disk and then
+  // breaking every later command that calls loadPeers.
+  writeJsonAtomic(path, parseWith(PeersFile, file, path, "peers file"));
 }
 
 export function peerMap(peers: readonly StoredPeer[]): Map<string, Peer> {

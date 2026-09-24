@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { hostname } from "node:os";
 import { type HubMode } from "../hub/bind.js";
 import { resolveBindHost } from "../hub/netif.js";
@@ -84,17 +84,24 @@ export async function init(io: Io, opts: InitOptions): Promise<number> {
   const home = relayHome(io.env);
   ensureHome(home);
   const p = paths(home);
-  for (const existing of [p.identity, p.peers]) {
-    if (existsSync(existing)) throw new ConfigError(`already initialised: ${existing} exists`, "exists");
-  }
+  // The identity is the only file that means "initialised": writeIdentity
+  // itself refuses to overwrite one. Guarding on peers.json too would make a
+  // run that got that far before a later write failed (ENOSPC, EACCES) claim
+  // to be already initialised forever, with no identity a re-run could use.
+  if (existsSync(p.identity)) throw new ConfigError(`already initialised: ${p.identity} exists`, "exists");
   // Everything that can fail on bad input runs before the first write, and the
   // identity goes last: a failed init leaves no identity, so a re-run works.
   const hub = opts.host ? validateHub(await hubConfigFor(opts)) : undefined;
   const identity = generateIdentity(opts.alias);
-  savePeers(home, identity, []);
+  // Only write peers.json if it isn't already there, so a retry never wipes
+  // peers a partially-completed earlier run had already stored.
+  if (!existsSync(p.peers)) savePeers(home, identity, []);
   writeJsonAtomic(p.settings, relaySettings());
   writeJsonAtomic(p.mcp, mcpConfig(io, home));
+  // A retry without --host clears any hub.json left by an earlier failed
+  // --host attempt, so the machine doesn't silently keep acting as a host.
   if (hub) saveHub(home, hub);
+  else rmSync(p.hub, { force: true });
   writeIdentity(home, identity);
 
   io.out(`cc-relay initialised in ${home} as ${identity.alias}`);
@@ -170,8 +177,11 @@ export function add(io: Io, opts: AddOptions): number {
     throw new UsageError("--via only applies to a hub card");
   }
 
-  savePeers(home, self, [...peers, peer]);
+  // Link before peers: if the peer write then fails, no stored peer exists to
+  // block re-adding this same card. resolveEndpoint already refuses a link
+  // whose hubId isn't a stored peer, so a half-finished run still fails closed.
   if (link) saveLink(home, link);
+  savePeers(home, self, [...peers, peer]);
   io.out(`added ${peer.alias} (${fp})${link ? `, hub at ${link.host}:${link.port} via ${link.via}` : ""}`);
   io.out(hub ? "Restart cc-relay hub and any relay sessions to pick up the new peer." : "Restart any relay sessions to pick up the new peer.");
   return 0;
