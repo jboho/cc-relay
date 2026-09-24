@@ -186,6 +186,15 @@ describe("home and identity", () => {
     }
   });
 
+  test("openPrivate closes its fd even when it refuses the file", () => {
+    const home = nextHome();
+    mkdirSync(home, { mode: 0o755 });
+    chmodSync(home, 0o755);
+    const before = readdirSync("/dev/fd").length;
+    expect(codeOf(() => checkPrivate(home, "x"))).toBe("permissions");
+    expect(readdirSync("/dev/fd").length).toBe(before);
+  });
+
   test("writeIdentity leaves no leftover temp file behind, whether it succeeds or an identity already exists", () => {
     const home = nextHome();
     ensureHome(home);
