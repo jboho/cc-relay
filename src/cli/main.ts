@@ -53,12 +53,17 @@ function positional(args: string[], name: string): string {
 }
 
 const COMMANDS = ["init", "add", "remove", "card", "list", "hub", "channel", "doctor"] as const;
+type Command = (typeof COMMANDS)[number];
+
+function isCommand(value: string): value is Command {
+  return (COMMANDS as readonly string[]).includes(value);
+}
 
 async function dispatch(command: string, rest: string[], io: Io): Promise<number> {
   // Checked first so `cc-relay frobnicate --help` is an unknown-command usage
   // error, not usage-and-exit-0: the --help short-circuit below would
   // otherwise trigger for any command, known or not.
-  if (!(COMMANDS as readonly string[]).includes(command)) throw new UsageError(`unknown command: ${command}`);
+  if (!isCommand(command)) throw new UsageError(`unknown command: ${command}`);
   // Checked before parseArgs/manual argument checks, since none of the
   // subcommands define --help/-h themselves: parseArgs's strict mode would
   // otherwise reject it as an unknown option, and the no-arguments commands
@@ -126,8 +131,13 @@ async function dispatch(command: string, rest: string[], io: Io): Promise<number
       if (command === "channel") return channel(io);
       return doctor(io);
     }
-    default:
-      throw new UsageError(`unknown command: ${command}`);
+    default: {
+      // Unreachable: isCommand() above already refused anything outside
+      // COMMANDS, so every member of Command is handled by a case above.
+      // This only guards against a case being dropped when Command changes.
+      const _exhaustive: never = command;
+      throw new UsageError(`unknown command: ${String(_exhaustive)}`);
+    }
   }
 }
 
