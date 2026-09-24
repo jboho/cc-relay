@@ -113,11 +113,16 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
   );
   // The claude ancestor's argv is found once, since a process's argv can't
   // change; but its --settings file can be edited mid-session, so checkLaunch
-  // re-reads it on every call rather than caching the result here.
+  // re-reads it on every call rather than caching the result here. That can
+  // only take permission away, though, never grant it: nothing shows Claude
+  // Code reloads a --settings file after startup, so a session that started
+  // without the ask rule keeps the settings it loaded, whatever the file says
+  // later, and must stay blocked for its whole lifetime rather than unblock
+  // the moment the file looks right.
   const argv = findClaudeArgv(deps.ppid ?? process.ppid, deps.lookup);
-  const launch = (): LaunchCheck => (argv.ok ? checkLaunch(argv.argv) : { ok: false, reason: argv.reason });
-  const initial = launch();
+  const initial: LaunchCheck = argv.ok ? checkLaunch(argv.argv) : { ok: false, reason: argv.reason };
   if (!initial.ok) io.err(`cc-relay: send is blocked: ${initial.reason}`);
+  const launch = (): LaunchCheck => (initial.ok && argv.ok ? checkLaunch(argv.argv) : initial);
 
   // Replaced by created.deliver below, before client.start() begins passing
   // inbound frames through onMessage; no frame can reach this placeholder.

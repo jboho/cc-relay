@@ -178,6 +178,23 @@ describe("channel command", () => {
     expect(await bob.call("send", { to: "alice", text: "sneaky" })).toMatch(/^blocked: could not inspect process 4242: ps timed out/);
   });
 
+  test("a session blocked at startup stays blocked even if the settings file gains the ask rule later", async () => {
+    const { aliceHome, bobHome } = await pair();
+    const alice = await session(aliceHome);
+    const settingsPath = paths(bobHome).settings;
+    const original = readFileSync(settingsPath, "utf8");
+    writeFileSync(settingsPath, JSON.stringify({ permissions: {} }));
+    try {
+      const bob = await session(bobHome);
+      expect(bob.io.stderr[0]).toMatch(/^cc-relay: send is blocked: /);
+      writeFileSync(settingsPath, original);
+      await waitFor(() => bob.io.stderr.includes("cc-relay: connected to hub") && alice.io.stderr.includes("cc-relay: connected to hub"));
+      expect(await bob.call("send", { to: "alice", text: "sneaky" })).toMatch(/^blocked: /);
+    } finally {
+      writeFileSync(settingsPath, original);
+    }
+  });
+
   test("re-reads the settings file on every send and peers call, so a mid-session edit takes effect", async () => {
     const { aliceHome, bobHome } = await pair();
     const alice = await session(aliceHome);
