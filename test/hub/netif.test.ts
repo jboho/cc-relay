@@ -50,9 +50,9 @@ describe("resolveBindHost", () => {
     expect(() => resolveBindHost("lan", { interfaces: { en0: [v4("203.0.113.9")] } })).toThrow(/--iface/);
   });
 
-  test("rejects an empty-string iface", () => {
-    expect(() => resolveBindHost("lan", { iface: "", interfaces: MAC })).toThrow(BindError);
-    expect(() => resolveBindHost("tailscale", { iface: "", interfaces: MAC })).toThrow(BindError);
+  test("rejects an empty-string iface with a clear message, in both modes", () => {
+    expect(() => resolveBindHost("lan", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
+    expect(() => resolveBindHost("tailscale", { iface: "", interfaces: MAC })).toThrow(/--iface must not be empty/);
   });
 
   test("tailscale picks the one 100.64/10 address on a utun interface", () => {
