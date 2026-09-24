@@ -65,6 +65,24 @@ describe("escapeChannelTags", () => {
     expect(escapeChannelTags("« quote »")).toBe("« quote »");
     expect(escapeChannelTags("❮ next")).toBe("❮ next");
   });
+
+  // TAG_RE used to put two independent [.]* runs (GAP\/?GAP) side by side with
+  // nothing required between them: with no "/" and no "channel" following, the
+  // engine tried every split point between the two runs before giving up,
+  // which is quadratic. A detached probe measured the old pattern at ~3.2s for
+  // the first case below and ~1.6s for the second; each must now finish well
+  // under vitest's timeout, and unchanged, since none of these ever spell out
+  // "channel".
+  test("a long run of gap characters with no channel word after it does not stall", () => {
+    const start = performance.now();
+    const combining = "<" + "́".repeat(16000);
+    expect(escapeChannelTags(combining)).toBe(combining);
+    const spaces = "<" + " ".repeat(32000);
+    expect(escapeChannelTags(spaces)).toBe(spaces);
+    const zeroWidth = "</" + "​".repeat(16000);
+    expect(escapeChannelTags(zeroWidth)).toBe(zeroWidth);
+    expect(performance.now() - start).toBeLessThan(100);
+  });
 });
 
 describe("InboundGate", () => {

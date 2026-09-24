@@ -18,7 +18,14 @@ const INVISIBLE = "\\p{Cf}\\p{M}\\u115F\\u1160\\u3164\\uFFA0";
 const GAP = `[\\s${INVISIBLE}]*`;
 const WORD = [..."channe"].map((c) => `${c}[${INVISIBLE}]*`).join("") + "l";
 const OPEN = "[<\\uFF1C\\uFE64\\u2039\\u3008\\u2329\\u27E8\\u00AB\\u276E\\u02C2]";
-const TAG_RE = new RegExp(`${OPEN}(${GAP}\\/?${GAP}${WORD})`, "giu");
+// GAP\/?GAP (two independent [.]* runs with nothing required between them)
+// is quadratic: with no "/" and no "channel" following, the engine tries every
+// split point between the two runs before giving up. Folding the slash and
+// its trailing gap into one optional group leaves a single greedy run to
+// backtrack, not two -- same matches, linear time. WORD doesn't share this
+// shape: each of its [INVISIBLE]* runs sits between two required literal
+// characters (c, h, a, n, n, e), so there's only ever one way to place it.
+const TAG_RE = new RegExp(`${OPEN}(${GAP}(?:\\/${GAP})?${WORD})`, "giu");
 
 export function escapeChannelTags(text: string): string {
   return text.replace(TAG_RE, "&lt;$1");
