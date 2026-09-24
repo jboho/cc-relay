@@ -148,7 +148,10 @@ export function writeJsonAtomic(path: string, value: unknown): void {
   checkPrivate(dirname(path), "cc-relay home", "directory");
   const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString("hex")}`;
   try {
-    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: "wx", flush: true });
+    // Buffer, not a string: writeFileSync's C++ fast path for a plain-string,
+    // default-utf8 write bypasses both the write loop and flush entirely, so
+    // a string here would silently skip the guarantees the comment above claims.
+    writeFileSync(tmp, Buffer.from(`${JSON.stringify(value, null, 2)}\n`), { mode: 0o600, flag: "wx", flush: true });
     renameSync(tmp, path);
   } catch (err) {
     rmSync(tmp, { force: true });

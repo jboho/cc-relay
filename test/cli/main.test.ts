@@ -157,6 +157,21 @@ describe("main", () => {
     }
   });
 
+  test("an errno with an underscore (EAI_AGAIN) is still appended, unlike a Node-internal ERR_ code", async () => {
+    const home = nextHome();
+    await main(
+      ["init", "--alias", "alice", "--host", "--mode", "tailscale", "--port", "24001", "--tailscale-login", "alice@example.com"],
+      fakeIo(home),
+    );
+    vi.mocked(resolveTailscale).mockRejectedValueOnce(
+      new TailscaleError("tailscale lookup failed", { cause: Object.assign(new Error("dns"), { code: "EAI_AGAIN" }) }),
+    );
+    const io = fakeIo(home);
+    expect(await main(["hub"], io)).toBe(1);
+    expect(io.stderr).toHaveLength(1);
+    expect(io.stderr[0]).toContain("(EAI_AGAIN)");
+  });
+
   test("an errno already embedded in the thrower's own message is not appended a second time", async () => {
     const blocker = nextHome();
     writeFileSync(blocker, "not a directory", { mode: 0o600 });
