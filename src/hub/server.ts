@@ -69,8 +69,25 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     res.end();
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_PAYLOAD_BYTES });
+  // A malformed upgrade (bad method, bad Upgrade/Sec-WebSocket-Key/Version,
+  // an unacceptable protocol/extensions header) makes ws abort the handshake
+  // itself. Left to its default, that's a 400 Bad Request with a text/html
+  // body — a fingerprint distinguishing this hub from a closed port. Answer
+  // with the same bare 404 as everything else instead. This socket already
+  // has the error listener attached below (it's added before handleUpgrade
+  // is ever called), so an RST here can't crash the process either.
+  wss.on("wsClientError", (_err, socket) => socket.end(RAW_404));
 
   http.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    // Node removes its own listener for the raw socket's 'error' event before
+    // emitting 'upgrade', so a client that resets the connection right after
+    // an upgrade (wrong path, over the pending cap, or any ws-level abort
+    // below) would otherwise throw an uncaught EPIPE/ECONNRESET and crash the
+    // whole process. Attach a listener first, before anything that could
+    // write to or close this socket. ws attaches its own once handleUpgrade
+    // runs; this one stays as a backstop for the branches that return first.
+    socket.on("error", () => socket.destroy());
+
     if (req.url !== expectedUrl) {
       socket.end(RAW_404);
       return;
@@ -81,10 +98,25 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
       return;
     }
     pending++;
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, req));
+    let released = false;
+    // ws aborts a malformed upgrade (bad method/headers/key/version/protocol,
+    // a half-closed socket, or its own 503-after-close()) without ever
+    // invoking the handleUpgrade callback below, so releasing only from
+    // onConnection would leak this slot forever on those paths. The raw
+    // socket's own close fires on every path, successful handshake included,
+    // so tie the release to that instead; the auth-time release below reuses
+    // this same function, and the flag makes either caller safe first.
+    const release = () => {
+      if (!released) {
+        released = true;
+        pending--;
+      }
+    };
+    socket.once("close", release);
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, req, release));
   });
 
-  function onConnection(ws: WebSocket, req: IncomingMessage): void {
+  function onConnection(ws: WebSocket, req: IncomingMessage, release: () => void): void {
     const handshake = new Handshake({
       mode: opts.mode,
       hubId: opts.hubId,
@@ -95,16 +127,9 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
       ...(opts.whois ? { whois: opts.whois } : {}),
       remote: { address: req.socket.remoteAddress ?? "", port: req.socket.remotePort ?? 0 },
     });
-    let counted = true;
     let busy = false;
     let conn: Conn | undefined;
 
-    const releasePending = () => {
-      if (counted) {
-        counted = false;
-        pending--;
-      }
-    };
     // terminate() drops the TCP socket without a close frame: the client sees
     // 1006 and learns nothing about why.
     const kill = () => {
@@ -116,7 +141,7 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
     ws.on("error", kill);
     ws.on("close", () => {
       clearTimeout(authTimer);
-      releasePending();
+      release();
       authed.delete(ws);
       if (conn) router.detach(conn);
     });
@@ -149,7 +174,7 @@ export async function startHub(opts: HubOptions): Promise<RunningHub> {
           const id = handshake.onAuth(frame);
           if (!id) return kill();
           clearTimeout(authTimer);
-          releasePending();
+          release();
           conn = {
             id,
             // "ack" means the frame was handed to the target's ws socket, not
