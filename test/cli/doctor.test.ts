@@ -34,7 +34,7 @@ function exchange(from: string, to: string): void {
   const io = fakeIo(from);
   card(io);
   const c = decodeCard(io.stdout[0] ?? "");
-  add(fakeIo(to), { card: io.stdout[0] ?? "", confirm: fingerprint(c.signPub, c.boxPub) });
+  expect(add(fakeIo(to), { card: io.stdout[0] ?? "", confirm: fingerprint(c.signPub, c.boxPub) })).toBe(0);
 }
 
 const launchedWith = (settings: string | null): ProcLookup => (pid) =>
