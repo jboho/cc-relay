@@ -1,9 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkLaunch, checkThisSession, findClaudeArgv, makePsLookup, type ProcInfo, type ProcResult, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
-import { tempHomes } from "./helpers.js";
+import { checkLaunch, findClaudeArgv, makePsLookup, type ProcInfo, type ProcResult, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
 
 const GOOD = JSON.stringify({ permissions: { ask: [SEND_TOOL] } });
 const files: Record<string, string> = {
@@ -150,34 +147,5 @@ describe("makePsLookup", () => {
   test("reports unparsable ps output distinctly from ps failing to run", () => {
     const garbled = () => "not what ps normally prints";
     expect(makePsLookup(garbled)(50)).toEqual({ ok: false, reason: "ps produced output that didn't parse for process 50" });
-  });
-
-  test("outside claude, the session check is blocked", () => {
-    expect(checkThisSession(process.pid, () => ({ ok: true, info: { ppid: 1, args: "zsh" } }))).toEqual({
-      ok: false,
-      reason: "not running under a claude process",
-    });
-  });
-
-  test("a lookup failure surfaces its own reason, distinct from 'not running under a claude process'", () => {
-    expect(checkThisSession(process.pid, () => ({ ok: false, reason: "ps timed out" }))).toEqual({
-      ok: false,
-      reason: `could not inspect process ${process.pid}: ps timed out`,
-    });
-  });
-});
-
-describe("checkThisSession, end to end", () => {
-  const nextHome = tempHomes("launch");
-
-  test("passes when the claude ancestor's --settings file has the ask rule", () => {
-    const home = nextHome();
-    mkdirSync(home, { recursive: true });
-    const settingsPath = join(home, "settings.json");
-    writeFileSync(settingsPath, GOOD);
-    chmodSync(settingsPath, 0o600);
-    const lookup = (pid: number): ProcResult =>
-      pid === 50 ? { ok: true, info: { ppid: 1, args: `/opt/homebrew/bin/claude --settings ${settingsPath}` } } : { ok: false, reason: `no process ${pid}` };
-    expect(checkThisSession(50, lookup)).toEqual({ ok: true, settings: settingsPath });
   });
 });

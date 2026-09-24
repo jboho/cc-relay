@@ -138,10 +138,10 @@ export class HubClient {
       ws.terminate();
     };
 
-    // A socket this connect() replaced (e.g. after a second start() call, before
-    // the started guard existed, or any future path that outlives its ws) must
-    // not go on mutating state for a session that has already moved to a newer
-    // socket.
+    // Each connect() call closes over its own `ws`. A reconnect, a superseding
+    // session, or a frame already in flight can all cause this socket to keep
+    // firing events after the client has moved on to a newer one, so every
+    // handler below checks this.ws === ws before touching any shared state.
     ws.on("open", () => {
       if (this.ws !== ws) return;
       // Doubles as the handshake timer: a hub that pings without ever

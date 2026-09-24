@@ -304,4 +304,15 @@ describe("deliver never rejects", () => {
       process.off("unhandledRejection", onUnhandled);
     }
   });
+
+  test("a non-string from on a rejected (not delivered) message logs the drop, not a coercion error", async () => {
+    const { deliver, notes, logs } = await setup();
+    const frame = { ...fromBob("secret text"), from: 12345 as unknown as string };
+    await expect(deliver(frame)).resolves.toBeUndefined();
+    expect(notes).toEqual([]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain("dropped a message from 12345");
+    expect(logs[0]).toContain("unknown_sender");
+    expect(logs[0]).not.toContain("secret text");
+  });
 });

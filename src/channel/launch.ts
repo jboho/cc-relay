@@ -153,10 +153,3 @@ export function checkLaunch(argv: readonly string[], read: (path: string) => str
   }
   return { ok: true, settings: last };
 }
-
-// Run once at channel start; a session can't change its own argv afterwards.
-export function checkThisSession(ppid: number = process.ppid, lookup: ProcLookup = psLookup): LaunchCheck {
-  const argv = findClaudeArgv(ppid, lookup);
-  if (!argv.ok) return { ok: false, reason: argv.reason };
-  return checkLaunch(argv.argv);
-}

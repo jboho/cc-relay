@@ -135,7 +135,10 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
       const accepted = acceptInbound(frame, { selfId, selfBoxSec: deps.identity.boxSec, peers: byId, replay, now: deps.now() });
       if (!accepted.ok) {
         // Never log plaintext (R16); the sender id and reason are enough to debug.
-        deps.log(`cc-relay: dropped a message from ${frame.from.slice(0, 8)}…: ${accepted.reason}`);
+        // from is typed as a string (InboundFrame), but coerced defensively here
+        // too, for the same reason as the catch below: that guarantee doesn't
+        // hold for every caller of deliver().
+        deps.log(`cc-relay: dropped a message from ${String(frame.from).slice(0, 8)}…: ${accepted.reason}`);
         return;
       }
       const decision = gate.admit();

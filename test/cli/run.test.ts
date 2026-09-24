@@ -61,7 +61,7 @@ function exchange(from: string, to: string): void {
   expect(add(fakeIo(to), { card: io.stdout[0] ?? "", confirm: fingerprint(c.signPub, c.boxPub) })).toBe(0);
 }
 
-// A claude parent process launched with the relay settings, for checkThisSession.
+// A claude parent process launched with the relay settings, for findClaudeArgv/checkLaunch.
 const launchedWith = (settings: string | null): ProcLookup => (pid) =>
   pid === 4242
     ? { ok: true, info: { ppid: 1, args: settings ? `claude --settings ${settings}` : "claude" } }
