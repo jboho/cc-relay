@@ -92,10 +92,10 @@ interface Session {
   done: Promise<number>;
 }
 
-async function session(home: string, settings: string | null = paths(home).settings): Promise<Session> {
+async function session(home: string, settings: string | null = paths(home).settings, lookup: ProcLookup = launchedWith(settings)): Promise<Session> {
   const io = fakeIo(home);
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
-  const done = channel(io, { transport: serverSide, ppid: 4242, lookup: launchedWith(settings) });
+  const done = channel(io, { transport: serverSide, ppid: 4242, lookup });
   const client = new Client({ name: "test", version: "0" });
   const notes: Session["notes"] = [];
   client.setNotificationHandler(z.object({ method: z.literal("notifications/claude/channel"), params: z.any() }), (n) => {
@@ -169,6 +169,13 @@ describe("channel command", () => {
     expect(await alice.call("send", { to: "bob", text: "still reaches you" })).toBe("sent");
     await waitFor(() => bob.notes.length === 1);
     expect(alice.notes).toEqual([]);
+  });
+
+  test("a process-lookup failure blocks sending with its own reason, not the generic no-ancestor message", async () => {
+    const { bobHome } = await pair();
+    const bob = await session(bobHome, undefined, () => ({ ok: false, reason: "ps timed out" }));
+    expect(bob.io.stderr[0]).toBe("cc-relay: send is blocked: could not inspect process 4242: ps timed out");
+    expect(await bob.call("send", { to: "alice", text: "sneaky" })).toMatch(/^blocked: could not inspect process 4242: ps timed out/);
   });
 
   test("re-reads the settings file on every send and peers call, so a mid-session edit takes effect", async () => {
