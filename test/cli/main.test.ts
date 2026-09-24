@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { EX_USAGE, main, USAGE } from "../../src/cli/main.js";
-import { loadHub, loadIdentity, saveHub } from "../../src/channel/config.js";
+import { loadHub, loadIdentity } from "../../src/channel/config.js";
+import { resolveTailscale, TailscaleError } from "../../src/hub/tailscale.js";
 import { tempHomes } from "../channel/helpers.js";
 import { fakeIo } from "./helpers.js";
 
@@ -24,13 +25,12 @@ vi.mock("../../src/hub/netif.js", async (importOriginal) => {
   };
 });
 
+// A vi.fn() wrapping the real implementation by default, so every test in
+// this file but the one below still exercises the actual resolveTailscale;
+// that test overrides it for a single call with mockRejectedValueOnce.
 vi.mock("../../src/hub/tailscale.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/hub/tailscale.js")>();
-  return {
-    ...actual,
-    resolveTailscale: () =>
-      Promise.reject(new actual.TailscaleError("tailscale CLI not found or not working; tried: none")),
-  };
+  return { ...actual, resolveTailscale: vi.fn(actual.resolveTailscale) };
 });
 
 const nextHome = tempHomes("cli-main");
@@ -118,16 +118,29 @@ describe("main", () => {
 
   test("hub reports a tailscale setup problem as a setup error, not a stack trace", async () => {
     const home = nextHome();
+    // Fine to init --mode tailscale directly here (unlike hub(), which needs
+    // this Mac's absent real utun address): resolveBindHost is mocked above
+    // for the tailscale case, and an explicit --port skips the real
+    // port-picking probe that would otherwise try to bind that fake address.
     await main(
-      ["init", "--alias", "alice", "--host", "--mode", "loopback", "--port", "23998", "--name", "127.0.0.1"],
+      [
+        "init",
+        "--alias",
+        "alice",
+        "--host",
+        "--mode",
+        "tailscale",
+        "--port",
+        "23998",
+        "--tailscale-login",
+        "alice@example.com",
+      ],
       fakeIo(home),
     );
-    const existing = loadHub(home);
-    if (!existing) throw new Error("expected init --host to have written a hub config");
-    // Rewritten to tailscale mode directly rather than via `init --host
-    // --mode tailscale`: init resolves the real bind host at setup time too,
-    // and this machine has no real utun/tailscale interface to give it.
-    saveHub(home, { ...existing, mode: "tailscale", tailscaleLogin: "alice@example.com" });
+    expect(loadHub(home)).toMatchObject({ mode: "tailscale" });
+    vi.mocked(resolveTailscale).mockRejectedValueOnce(
+      new TailscaleError("tailscale CLI not found or not working; tried: none"),
+    );
     const io = fakeIo(home);
     expect(await main(["hub"], io)).toBe(1);
     expect(io.stderr).toHaveLength(1);
