@@ -222,6 +222,10 @@ function parseWith<T>(schema: z.ZodType<T>, raw: unknown, path: string, what: st
 // silently lost), but leaves the write itself off the final path until the
 // link succeeds. No fsync here (unlike writeJsonAtomic): out of scope for
 // this change.
+// A crash between the writeFileSync and the linkSync leaves the temp file
+// behind: a 0600 identity.json.tmp-* holding the secret key, inside the
+// already-private home directory. Not cleaned up by anything today; a future
+// pass over the home could remove stale .tmp-* files on startup.
 export function writeIdentity(home: string, identity: Identity): void {
   checkPrivate(home, "cc-relay home", "directory");
   const path = paths(home).identity;
@@ -233,7 +237,14 @@ export function writeIdentity(home: string, identity: Identity): void {
     if (isErrno(err, "EEXIST")) throw new ConfigError(`identity already exists at ${path}`, "exists", { cause: err });
     throw err;
   } finally {
-    rmSync(tmp, { force: true });
+    // Best-effort: a failure here (e.g. the temp file's parent vanished
+    // between the write and this cleanup) must not replace the real result
+    // above with an unrelated cleanup error.
+    try {
+      rmSync(tmp, { force: true });
+    } catch {
+      // ignored, see comment above
+    }
   }
 }
 
