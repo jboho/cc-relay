@@ -19,21 +19,30 @@ export type ProcResult = { ok: true; info: ProcInfo } | { ok: false; reason: str
 
 export type ProcLookup = (pid: number) => ProcResult;
 
-export const psLookup: ProcLookup = (pid) => {
-  let out: string;
-  try {
-    out = execFileSync("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
-  } catch (err) {
-    const e = err as NodeJS.ErrnoException;
-    // execFileSync sets .code to ETIMEDOUT (not a signal) when its own timeout
-    // option killed the child, distinct from the process legitimately failing.
-    if (e.code === "ETIMEDOUT") return { ok: false, reason: `ps timed out inspecting process ${pid}` };
-    return { ok: false, reason: `ps failed: ${e.message}` };
-  }
-  const m = /^\s*(\d+)\s+(.*)$/.exec(out.trimEnd());
-  if (!m) return { ok: false, reason: `ps produced output that didn't parse for process ${pid}` };
-  return { ok: true, info: { ppid: Number(m[1]), args: m[2] as string } };
-};
+type ExecFileSync = (file: string, args: readonly string[], options: { encoding: "utf8"; timeout: number }) => string;
+
+// The real ps invocation is injectable so tests can force the timeout and
+// unparsable-output paths deterministically, instead of racing a slow or
+// broken process on the real machine. Default behavior is unchanged.
+export function makePsLookup(exec: ExecFileSync = (file, args, options) => execFileSync(file, args, options)): ProcLookup {
+  return (pid) => {
+    let out: string;
+    try {
+      out = exec("ps", ["-o", "ppid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 2000 });
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      // execFileSync sets .code to ETIMEDOUT (not a signal) when its own timeout
+      // option killed the child, distinct from the process legitimately failing.
+      if (e.code === "ETIMEDOUT") return { ok: false, reason: `ps timed out inspecting process ${pid}` };
+      return { ok: false, reason: `ps failed: ${e.message}` };
+    }
+    const m = /^\s*(\d+)\s+(.*)$/.exec(out.trimEnd());
+    if (!m) return { ok: false, reason: `ps produced output that didn't parse for process ${pid}` };
+    return { ok: true, info: { ppid: Number(m[1]), args: m[2] as string } };
+  };
+}
+
+export const psLookup: ProcLookup = makePsLookup();
 
 function isClaude(tokens: readonly string[]): boolean {
   const first = basename(tokens[0] ?? "");

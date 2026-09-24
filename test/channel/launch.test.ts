@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkLaunch, checkThisSession, findClaudeArgv, type ProcInfo, type ProcResult, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
+import { checkLaunch, checkThisSession, findClaudeArgv, makePsLookup, type ProcInfo, type ProcResult, psLookup, SEND_TOOL } from "../../src/channel/launch.js";
 import { tempHomes } from "./helpers.js";
 
 const GOOD = JSON.stringify({ permissions: { ask: [SEND_TOOL] } });
@@ -129,6 +129,27 @@ describe("the real process table", () => {
     const result = psLookup(dead);
     expect(result.ok).toBe(false);
     expect(!result.ok && result.reason).toMatch(/ps failed/);
+  });
+});
+
+describe("makePsLookup", () => {
+  test("reports a timeout distinctly from a generic ps failure", () => {
+    const timedOut = () => {
+      throw Object.assign(new Error("ps did not respond"), { code: "ETIMEDOUT" });
+    };
+    expect(makePsLookup(timedOut)(50)).toEqual({ ok: false, reason: "ps timed out inspecting process 50" });
+  });
+
+  test("a non-timeout ps failure keeps its own message, not the timeout wording", () => {
+    const enoent = () => {
+      throw Object.assign(new Error("spawn ps ENOENT"), { code: "ENOENT" });
+    };
+    expect(makePsLookup(enoent)(50)).toEqual({ ok: false, reason: "ps failed: spawn ps ENOENT" });
+  });
+
+  test("reports unparsable ps output distinctly from ps failing to run", () => {
+    const garbled = () => "not what ps normally prints";
+    expect(makePsLookup(garbled)(50)).toEqual({ ok: false, reason: "ps produced output that didn't parse for process 50" });
   });
 
   test("outside claude, the session check is blocked", () => {
