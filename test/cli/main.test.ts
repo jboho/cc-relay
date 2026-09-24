@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,6 +153,18 @@ describe("main", () => {
     } finally {
       chmodSync(paths(home).identity, 0o600);
     }
+  });
+
+  test("an errno already embedded in the thrower's own message is not appended a second time", async () => {
+    const blocker = nextHome();
+    writeFileSync(blocker, "not a directory", { mode: 0o600 });
+    const home = `${blocker}/sub`;
+    const io = fakeIo(home);
+    expect(await main(["init", "--alias", "alice"], io)).toBe(1);
+    expect(io.stderr).toHaveLength(1);
+    const line = io.stderr[0] ?? "";
+    expect(line).toMatch(/^cc-relay: /);
+    expect(line.match(/\(ENOTDIR\)/g)).toHaveLength(1);
   });
 
   test("hub reports a tailscale setup problem as a setup error, not a stack trace", async () => {
