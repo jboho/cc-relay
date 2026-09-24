@@ -245,8 +245,42 @@ describe("add", () => {
     const c = cardOf(host.home);
     expect(() => add(fakeIo(guest.home), { card: c.text, confirm: c.fp, tailscaleLogin: "a b" })).toThrow(ConfigError);
     expect(loadPeers(guest.home, loadIdentity(guest.home))).toEqual([]);
+    expect(loadLink(guest.home)).toBeUndefined();
     const io = fakeIo(guest.home);
     expect(list(io)).toBe(0);
+  });
+
+  test("a hub card whose alias matches an existing peer is refused before any write", async () => {
+    const guest = await fresh("bob");
+    const impostor = generateIdentity("carol");
+    add(fakeIo(guest.home), {
+      card: encodeCard({ alias: "alice", signPub: impostor.signPub, boxPub: impostor.boxPub }),
+      confirm: fingerprint(impostor.signPub, impostor.boxPub),
+    });
+    const host = await fresh("alice", true);
+    const c = cardOf(host.home);
+    expect(() => add(fakeIo(guest.home), { card: c.text, confirm: c.fp })).toThrow(ConfigError);
+    expect(loadLink(guest.home)).toBeUndefined();
+    expect(loadPeers(guest.home, loadIdentity(guest.home)).map((p) => p.alias)).toEqual(["alice"]);
+  });
+
+  test("a hub card whose key matches an existing peer is refused before any write", async () => {
+    const host = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const c = cardOf(host.home);
+    add(fakeIo(guest.home), { card: c.text, confirm: c.fp });
+    const originalLink = loadLink(guest.home);
+    const [existingPeer] = loadPeers(guest.home, loadIdentity(guest.home));
+    const dup = encodeCard({
+      alias: "eve",
+      signPub: existingPeer!.signPub,
+      boxPub: existingPeer!.boxPub,
+      hub: { lan: "10.0.0.7", port: 21001, path: "R".repeat(22) },
+    });
+    const dupFp = fingerprint(existingPeer!.signPub, existingPeer!.boxPub);
+    expect(() => add(fakeIo(guest.home), { card: dup, confirm: dupFp })).toThrow(ConfigError);
+    expect(loadLink(guest.home)).toEqual(originalLink);
+    expect(loadPeers(guest.home, loadIdentity(guest.home)).map((p) => p.alias)).toEqual(["alice"]);
   });
 
   test("--via lan on a card offering only tailscale is refused", async () => {

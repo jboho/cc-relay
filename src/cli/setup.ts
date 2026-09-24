@@ -22,6 +22,7 @@ import {
   saveLink,
   savePeers,
   validateHub,
+  validatePeers,
   writeIdentity,
   writeJsonAtomic,
 } from "../channel/config.js";
@@ -177,11 +178,13 @@ export function add(io: Io, opts: AddOptions): number {
     throw new UsageError("--via only applies to a hub card");
   }
 
-  // Link before peers: if the peer write then fails, no stored peer exists to
-  // block re-adding this same card. resolveEndpoint already refuses a link
-  // whose hubId isn't a stored peer, so a half-finished run still fails closed.
-  if (link) saveLink(home, link);
+  // Validate the complete peer list before touching any file: a duplicate
+  // alias/key or an invalid stored field (e.g. a malformed tailscaleLogin)
+  // must fail before link.json is written, or a rejected add would leave a
+  // link to a hub whose owner was never actually stored as a peer.
+  validatePeers(home, self, [...peers, peer]);
   savePeers(home, self, [...peers, peer]);
+  if (link) saveLink(home, link);
   io.out(`added ${peer.alias} (${fp})${link ? `, hub at ${link.host}:${link.port} via ${link.via}` : ""}`);
   io.out(hub ? "Restart cc-relay hub and any relay sessions to pick up the new peer." : "Restart any relay sessions to pick up the new peer.");
   return 0;

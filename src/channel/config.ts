@@ -240,11 +240,9 @@ export function loadPeers(home: string, self: Identity): StoredPeer[] {
   return peers;
 }
 
-export function savePeers(home: string, self: Identity, peers: readonly StoredPeer[]): void {
-  checkPeers(self, peers);
-  const path = paths(home).peers;
-  const file = {
-    v: 1 as const,
+function peersFileFor(peers: readonly StoredPeer[]): { v: 1; peers: unknown[] } {
+  return {
+    v: 1,
     peers: peers.map((p) => ({
       alias: p.alias,
       signPub: toB64u(p.signPub),
@@ -252,11 +250,22 @@ export function savePeers(home: string, self: Identity, peers: readonly StoredPe
       ...(p.tailscaleLogin !== undefined ? { tailscaleLogin: p.tailscaleLogin } : {}),
     })),
   };
-  // Run the same schema loadPeers enforces on read, here before the write, so a
-  // field that only makePeer's caller could get wrong (e.g. a tailscaleLogin
-  // with whitespace) throws "invalid" instead of landing on disk and then
-  // breaking every later command that calls loadPeers.
-  writeJsonAtomic(path, parseWith(PeersFile, file, path, "peers file"));
+}
+
+// The one check both savePeers and a caller that must validate a would-be peer
+// list before touching any other file (add, before it writes link.json) run,
+// so the two can't drift apart. Runs the same schema loadPeers enforces on
+// read, so a field only a caller could get wrong (e.g. a tailscaleLogin with
+// whitespace) throws "invalid" here instead of landing on disk.
+export function validatePeers(home: string, self: Identity, peers: readonly StoredPeer[]): void {
+  checkPeers(self, peers);
+  const path = paths(home).peers;
+  parseWith(PeersFile, peersFileFor(peers), path, "peers file");
+}
+
+export function savePeers(home: string, self: Identity, peers: readonly StoredPeer[]): void {
+  validatePeers(home, self, peers);
+  writeJsonAtomic(paths(home).peers, peersFileFor(peers));
 }
 
 export function peerMap(peers: readonly StoredPeer[]): Map<string, Peer> {
