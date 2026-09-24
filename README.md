@@ -2,27 +2,27 @@
 
 Cross-machine, cross-account messaging between interactive Claude Code sessions: a Channels MCP server on each machine and a small end-to-end-encrypted hub on one Mac, reachable over Tailscale or the local network.
 
-Status: M0–M4 built (protocol, hub, channel server, CLI, `doctor`, local end-to-end test). M5 (LAN, live with a peer) and M6 (Tailscale, live) are next. Design: [.ai/docs/plans/2026-09-23-cc-relay-design.md](.ai/docs/plans/2026-09-23-cc-relay-design.md). Build plans: [M0–M2](.ai/docs/plans/2026-09-23-cc-relay-m0-m2.md), [M3–M4](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md).
+Status: M0–M3 built. M4: automated tests done (protocol, hub, channel server, CLI, `doctor`, local end-to-end test); manual runbook pending. M5 (LAN, live with a peer) and M6 (Tailscale, live) are next. Design: [.ai/docs/plans/2026-09-23-cc-relay-design.md](.ai/docs/plans/2026-09-23-cc-relay-design.md). Build plans: [M0–M2](.ai/docs/plans/2026-09-23-cc-relay-m0-m2.md), [M3–M4](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md).
 
 ## How it fits together
 
-One machine is the **host**: it runs `cc-relay hub`, a WebSocket server that forwards sealed messages between the people on its allowlist. Every other machine is a **guest**. Each machine, host included, has its own identity (a signing key and an encryption key) in `~/.config/cc-relay/`.
+One machine is the **host**: it runs `cc-relay hub`, a WebSocket server that forwards sealed messages between the people on its allowlist. Every other machine is a **guest**. Each machine, host included, has its own identity (a signing key and an encryption key) in `~/.config/cc-relay/` (or `CC_RELAY_HOME`, if set) — that path can't contain spaces.
 
 You start a relay session with the `claude-relay` alias. It launches Claude Code with the cc-relay channel loaded. The channel connects to the hub. Messages from peers appear in the session, and Claude can answer with the `send` tool. **You approve every send**: the alias loads a settings file that makes Claude Code ask before each `send` call. Your other Claude Code sessions don't load cc-relay at all.
 
-The hub only ever sees ciphertext. It knows who is talking to whom and when, but not what is said.
+The hub only ever sees ciphertext. It knows who is talking to whom, when, and roughly how much, but not what is said.
 
 ## Install (each machine)
 
 Needs Node 22 or later and pnpm.
 
 ```bash
-git clone <this repo> ~/Code/cc-relay   # or copy it; the path must not contain spaces
+git clone <this repo> ~/Code/cc-relay   # or copy it
 cd ~/Code/cc-relay
 pnpm install && pnpm build
 ```
 
-Put a `cc-relay` command on your PATH. This wrapper records node's full path when you create it, so it still works from shells that don't load your `~/.zshrc` (Claude Code's `!` commands, for example):
+Put a `cc-relay` command on your PATH. Point it at wherever you cloned or copied the repo — the path below assumes `~/Code/cc-relay`. This wrapper records node's full path when you create it, so it keeps working after an `nvm use` or other version switch, and from shells that don't load your `~/.zshrc` (Claude Code's `!` commands, for example):
 
 ```bash
 mkdir -p ~/.local/bin
@@ -33,7 +33,7 @@ EOF
 chmod +x ~/.local/bin/cc-relay
 ```
 
-If `~/.local/bin` isn't on your PATH, add it in `~/.zshrc`. After you rebuild or move the repo, re-run `cc-relay doctor`; it checks the paths Claude Code will use.
+If `~/.local/bin` isn't on your PATH, add it in `~/.zprofile`, which zsh login shells read (macOS terminals are login shells). After you rebuild or move the repo, re-run `cc-relay doctor`; it checks the paths Claude Code will use.
 
 ## Set up
 
@@ -51,7 +51,7 @@ cc-relay init --alias alice --host --mode lan
 cc-relay init --alias bob
 ```
 
-`init` prints your fingerprint and a line like this. Add it to `~/.zshrc`:
+`init` prints your fingerprint and a line like this, with your machine's absolute paths filled in. Add it to `~/.zshrc`:
 
 ```bash
 alias claude-relay='claude --mcp-config ~/.config/cc-relay/mcp.json --settings ~/.config/cc-relay/settings.json --permission-mode manual --dangerously-load-development-channels server:cc-relay'
@@ -114,7 +114,7 @@ The hub check sends a hello and stops at the hub's challenge. It never completes
 - **The fingerprint covers the keys, not the hub address.** Someone who swaps the address in a host card can point the guest at a different server. That server can't read messages or pass as the host's peers. The guest just won't reach anyone, and `doctor` will show the hub check failing.
 - **Only one relay session per identity at a time.** A second `claude-relay` session takes over the hub connection. The first one stops receiving, and its `send` and `peers` tools say it was replaced. Restart it to take the connection back.
 - **The hub stops on an internal error on purpose**, rather than keep running in a bad state. Restart it with `cc-relay hub`.
-- **Peers can't make you run anything.** A message is text shown to Claude, marked as coming from that peer. Claude still asks you before every send, and your normal permission prompts apply to everything else.
+- **A peer's message can't run anything by itself.** It's untrusted text that reaches Claude and can try to steer it — prompt injection. The escaping that stops a peer from forging its own `<channel>` tag has a known gap too: it doesn't catch lookalike letters borrowed from another script. Anything your other settings already allow without asking, such as allow rules in `~/.claude/settings.json` (which still load next to `--settings`) or auto/acceptEdits mode, could run because of it. Keep relay sessions in manual mode, and read each send prompt before approving: a send can carry data out.
 
 ## Development
 

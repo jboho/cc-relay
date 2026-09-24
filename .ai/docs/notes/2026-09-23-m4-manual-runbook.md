@@ -6,10 +6,21 @@ You need four terminal tabs. Two separate identities (alice, the host, and bob, 
 
 Fill in the results table at the end as you go.
 
+## Before you start
+
+Use a checkout that has the M3-M4 code: branch `feat/m3-m4` before it's merged, `main` after. On this machine, that's the worktree:
+
+```bash
+R=~/Code/.worktrees/cc-relay-m3-m4   # until feat/m3-m4 merges into main; then R=~/Code/cc-relay
+cd $R && command pnpm install && command pnpm build
+```
+
+Install the `cc-relay` wrapper from the README's "Install" section, pointed at `$R` instead of a fixed path, and check it: `command -v cc-relay`. `init` writes the `dist/cli.js` path it ran from into `mcp.json`, so the build you run `init` from is the one Claude Code launches.
+
 ## Setup (tab 1)
 
 ```bash
-cd ~/Code/cc-relay && command pnpm build
+cd $R && command pnpm build
 export A=$HOME/.config/cc-relay-m4-alice B=$HOME/.config/cc-relay-m4-bob
 CC_RELAY_HOME=$A cc-relay init --alias alice --host --mode loopback
 CC_RELAY_HOME=$B cc-relay init --alias bob
