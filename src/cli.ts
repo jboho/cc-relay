@@ -52,9 +52,17 @@ const code = await main(argv, {
 // process.exit() for the long-running commands would otherwise race a
 // backed-up pipe: write() queues the data and returns before the OS has
 // necessarily accepted all of it, so exit() right after can truncate the
-// last line (e.g. "cc-relay hub stopped" | some-slow-reader). Waiting for
-// both write callbacks proves the data is out before the process tears down.
+// last line (e.g. "cc-relay hub stopped" | some-slow-reader). An empty
+// write's callback only fires after every write queued ahead of it has
+// drained, so waiting for both stdout's and then stderr's proves all of the
+// real output is out before the process tears down -- as long as the reader
+// on the other end keeps draining. If it stops reading entirely (a stuck or
+// abandoned pipe), those callbacks never fire and the process would hang
+// forever; the timer below is a backstop that forces the exit anyway. It's
+// unref()'d so it never itself keeps the process alive once the normal path
+// succeeds first.
 if (longRunning) {
+  setTimeout(() => process.exit(code), 2000).unref();
   process.stdout.write("", () => process.stderr.write("", () => process.exit(code)));
 } else {
   process.exitCode = code;
