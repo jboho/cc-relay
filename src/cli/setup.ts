@@ -206,7 +206,7 @@ export function remove(io: Io, alias: string): number {
   const peers = loadPeers(home, self);
   const target = peers.find((p) => p.alias === alias);
   if (!target) {
-    io.err(`no peer named ${alias}`);
+    io.err(`cc-relay: no peer named ${alias}`);
     return 1;
   }
   savePeers(home, self, peers.filter((p) => p !== target));
@@ -216,6 +216,11 @@ export function remove(io: Io, alias: string): number {
   } else {
     io.out(`removed ${alias}`);
   }
+  // The hub reads its allowlist only at startup (run.ts's hub()): removing a
+  // peer here doesn't drop them from an already-running hub until it restarts.
+  const hub = loadHub(home);
+  if (hub) io.out(`Restart cc-relay hub to drop ${alias} from its allowlist; until then the hub still accepts them.`);
+  io.out("Restart any relay sessions to pick up the change.");
   return 0;
 }
 

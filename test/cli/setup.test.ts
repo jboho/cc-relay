@@ -333,6 +333,26 @@ describe("remove and list", () => {
     expect(loadLink(guest.home)).toBeUndefined();
   });
 
+  test("removing a peer on a host warns that the running hub still accepts them until it restarts", async () => {
+    const host = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const c = cardOf(guest.home);
+    add(fakeIo(host.home), { card: c.text, confirm: c.fp });
+    const io = fakeIo(host.home);
+    expect(remove(io, "bob")).toBe(0);
+    expect(io.stdout).toContain("Restart cc-relay hub to drop bob from its allowlist; until then the hub still accepts them.");
+  });
+
+  test("removing a peer on a guest (no hub here) does not print the hub-restart warning", async () => {
+    const host = await fresh("alice", true);
+    const guest = await fresh("bob");
+    const c = cardOf(host.home);
+    add(fakeIo(guest.home), { card: c.text, confirm: c.fp });
+    const io = fakeIo(guest.home);
+    expect(remove(io, "alice")).toBe(0);
+    expect(io.stdout.some((l) => l.includes("Restart cc-relay hub"))).toBe(false);
+  });
+
   test("removing an unknown alias exits 1", async () => {
     const { home } = await fresh("bob");
     const io = fakeIo(home);
