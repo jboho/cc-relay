@@ -456,3 +456,40 @@ describe("hub: startup validation", () => {
     await new Promise<void>((resolve) => blocker.close(() => resolve()));
   });
 });
+
+describe("hub: fail-closed handler throws and teardown", () => {
+  test("a handler throw kills the connection silently and still surfaces to the operator", async () => {
+    let broken = false;
+    const h = await hub({ authTimeoutMs: 10_000, now: () => (broken ? Number.NaN : Date.now()) });
+    // The rethrow escapes ws's async listener as an unhandled rejection; capture
+    // it here instead of letting the runner report it as a stray error.
+    const saved = process.listeners("unhandledRejection");
+    process.removeAllListeners("unhandledRejection");
+    const surfaced = new Promise<unknown>((resolve) => process.once("unhandledRejection", resolve));
+    try {
+      const p = probe(h.url);
+      await p.open();
+      broken = true;
+      p.send(helloFrame(alice, h.hubId));
+      const code = await Promise.race([
+        p.closed,
+        new Promise<string>((r) => setTimeout(() => r("still open"), 1000)),
+      ]);
+      expect(code).toBe(1006);
+      expect(p.raw).toEqual([]);
+      expect(await surfaced).toBeInstanceOf(RangeError);
+    } finally {
+      process.removeAllListeners("unhandledRejection");
+      for (const l of saved) process.on("unhandledRejection", l as never);
+    }
+  });
+
+  test("close() stops the ping sweep", async () => {
+    const timeouts = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+    const before = timeouts();
+    const h = await startTestHub(host, []);
+    expect(timeouts()).toBe(before + 1);
+    await h.close();
+    expect(timeouts()).toBe(before);
+  });
+});
