@@ -337,6 +337,10 @@ describe("HubClient with a throwing app callback", () => {
       await waitFor(() => logs.some((l) => l.includes("boom from onMessage")));
       expect(uncaught).toBeUndefined();
       expect(logs.some((l) => l.includes(SEALED.ciphertext))).toBe(false);
+      expect(logs.some((l) => l.includes("onMessage threw"))).toBe(true);
+      expect(logs.some((l) => l.includes("internal error handling hub frame"))).toBe(false);
+      await new Promise((r) => setTimeout(r, 150));
+      expect(fake.connections()).toBe(1);
     } finally {
       process.off("uncaughtException", onUncaught);
     }
