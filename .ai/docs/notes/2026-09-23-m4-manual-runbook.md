@@ -28,16 +28,20 @@ CC_RELAY_HOME=$B cc-relay init --alias bob
 
 Each `init` prints an `alias claude-relay=…` line. Don't add these to `~/.zshrc`; the steps below launch Claude Code directly with the same flags.
 
-Pair them. Each `add` without `--confirm` prints the fingerprint; compare it with what `card` printed to stderr, then confirm:
+Pair them. Each `add` without `--confirm` prints the fingerprint and exits 2; compare it with what `card` printed to stderr. Then copy each fingerprint into a variable and confirm (paste the fingerprint itself, e.g. `ALICE_FP=3708-4028-1b24-632e-8978`, with no angle brackets):
 
 ```bash
 CC_RELAY_HOME=$B cc-relay add "$(CC_RELAY_HOME=$A cc-relay card)"
-CC_RELAY_HOME=$B cc-relay add "$(CC_RELAY_HOME=$A cc-relay card 2>/dev/null)" --confirm <alice's fingerprint>
+ALICE_FP=paste-alice-fingerprint-here
+CC_RELAY_HOME=$B cc-relay add "$(CC_RELAY_HOME=$A cc-relay card 2>/dev/null)" --confirm "$ALICE_FP"
 CC_RELAY_HOME=$A cc-relay add "$(CC_RELAY_HOME=$B cc-relay card)"
-CC_RELAY_HOME=$A cc-relay add "$(CC_RELAY_HOME=$B cc-relay card 2>/dev/null)" --confirm <bob's fingerprint>
+BOB_FP=paste-bob-fingerprint-here
+CC_RELAY_HOME=$A cc-relay add "$(CC_RELAY_HOME=$B cc-relay card 2>/dev/null)" --confirm "$BOB_FP"
 CC_RELAY_HOME=$A cc-relay list
 CC_RELAY_HOME=$B cc-relay list
 ```
+
+Paste each command as a single line. If a terminal wraps a long line when you copy it, a `CC_RELAY_HOME=…` prefix split onto its own line only sets a shell variable, and the command then runs against the default home.
 
 Expected: alice lists `hub: loopback mode …` and peer bob; bob lists `linked to alice's hub at 127.0.0.1:<port> via lan` and peer alice.
 
@@ -85,17 +89,17 @@ rm -rf ~/.config/cc-relay-m4-alice ~/.config/cc-relay-m4-bob
 
 ## Results
 
-Run on: `<date>`, `claude --version`: `<version>`
+Run on: 2026-09-24, `claude --version`: 2.1.282 (build at `9b15872`)
 
 | # | Check | Result | Notes |
 |---|---|---|---|
-| 1 | doctor inside a session | | |
-| 2 | peers tool | | |
-| 3 | send asks first | | |
-| 4 | delivery into the model (`--mcp-config`) | | |
-| 5 | deny sends nothing | | |
-| 6 | reply | | |
-| 7 | peer message is not an order | | |
-| 8 | no settings, no send | | |
-| 9 | takeover | | |
-| 10 | hub restart, reconnect | | |
+| 1 | doctor inside a session | PASS | Both sessions; Tailscale SKIP expected |
+| 2 | peers tool | PASS | |
+| 3 | send asks first | PASS | Approval prompt shown for `mcp__cc-relay__send` |
+| 4 | delivery into the model (`--mcp-config`) | PASS | Delivered despite the banner `server:cc-relay · no MCP server configured with that name`; the banner is cosmetic. Settles the `gate/RESULT.md` open item |
+| 5 | deny sends nothing | PASS | "No" interrupts the tool call; nothing reached bob |
+| 6 | reply | PASS | |
+| 7 | peer message is not an order | PASS | Alice's session named bob as the source, ran nothing, asked first |
+| 8 | no settings, no send | PASS | Send `blocked`; inbound still arrived. Hint pointed at the uninstalled `claude-relay` alias (reworded after the run) |
+| 9 | takeover | PASS | Old session `hub: superseded`, send refused. Peers still said `send: enabled` (fixed after the run) |
+| 10 | hub restart, reconnect | PASS | `hub disconnected` while down; send succeeded after restart with no session restart |

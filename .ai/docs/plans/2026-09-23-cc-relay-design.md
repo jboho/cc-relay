@@ -1,6 +1,6 @@
 # cc-relay: cross-machine Claude Code session messaging (plan for sign-off)
 
-**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done · M3 done · M4 automated done (489 tests), manual runbook pending; branch feat/m3-m4
+**Progress:** M0 spike done · M0 gate: PASS · M1 done · M2 done · M3 done · M4 done (automated + manual runbook 10/10 PASS 2026-09-24); merged to main
 
 > **Status:** DRAFT v3, approved. M0–M2 on `main`; M3–M4 built on `feat/m3-m4`.
 > **Decided 2026-09-23:**
