@@ -148,7 +148,15 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
     onMessage: (frame) => void deliver(frame),
     log: io.err,
   });
-  const created = createChannelServer({ identity: self, peers, hub: client, launch, now: Date.now, log: io.err });
+  const created = createChannelServer({
+    identity: self,
+    peers,
+    hub: client,
+    launch,
+    settingsPath: paths(home).settings,
+    now: Date.now,
+    log: io.err,
+  });
   deliver = created.deliver;
   await created.server.connect(deps.transport ?? new StdioServerTransport());
   client.start();

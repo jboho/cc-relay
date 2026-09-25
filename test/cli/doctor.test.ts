@@ -180,6 +180,25 @@ describe("doctor", () => {
     expect((await byName(guestHome, healthy())).session?.status).toBe("SKIP");
   });
 
+  test("the session check's FAIL detail gives a restart remedy naming the real settings path, for a bypass-flag reason", async () => {
+    const { guestHome } = await pair({ startHub: false });
+    const lookup: ProcLookup = (pid) =>
+      pid === 4242 ? { ok: true, info: { ppid: 1, args: "claude --dangerously-skip-permissions" } } : { ok: false, reason: `no process ${pid}` };
+    const detail = (await byName(guestHome, healthy({ lookup }))).session?.detail;
+    expect(detail).toContain("claude was launched with --dangerously-skip-permissions");
+    expect(detail).toContain(`claude --settings ${paths(guestHome).settings} and no bypass flags`);
+    expect(detail).toContain("claude-relay alias from cc-relay init");
+  });
+
+  test("the session check's FAIL detail gives the same remedy for a missing ask rule, not just a missing --settings", async () => {
+    const { guestHome } = await pair({ startHub: false });
+    const p = paths(guestHome).settings;
+    writeFileSync(p, JSON.stringify({ permissions: { allow: ["mcp__cc-relay__send"] } }));
+    const detail = (await byName(guestHome, healthy({ lookup: launchedWith(p) }))).session?.detail;
+    expect(detail).toContain("lacks permissions.ask");
+    expect(detail).toContain(`claude --settings ${p} and no bypass flags`);
+  });
+
   test("a process-lookup failure fails the session check, distinct from being outside claude", async () => {
     const { guestHome } = await pair({ startHub: false });
     expect((await byName(guestHome, healthy({ lookup: () => ({ ok: false, reason: "ps timed out" }) }))).session).toMatchObject({

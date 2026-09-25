@@ -133,7 +133,13 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
   } else {
     const launch = checkLaunch(argv.argv);
     if (launch.ok) add("PASS", "session", `this session asks before every send (${launch.settings})`);
-    else add("FAIL", "session", `${launch.reason}; send is blocked in this session`);
+    else {
+      add(
+        "FAIL",
+        "session",
+        `${launch.reason}; send is blocked in this session. Restart it with the claude-relay alias from cc-relay init, or with claude --settings ${p.settings} and no bypass flags`,
+      );
+    }
   }
 
   const offset = await (deps.clockOffset ?? sntpOffset)();

@@ -33,16 +33,6 @@ describe("checkLaunch", () => {
     expect((reversed as { reason: string }).reason).toContain("/relay/other.json");
   });
 
-  test("the missing --settings reason offers both the alias and a manual --settings path", () => {
-    // Not everyone who hits this has pasted the claude-relay alias into their
-    // shell (the runbook, in particular, never does), so the advice can't
-    // assume it exists - it has to name the flag it stands for too.
-    const result = checkLaunch(claude());
-    expect(result).toMatchObject({ ok: false });
-    expect((result as { reason: string }).reason).toMatch(/claude-relay alias from cc-relay init/);
-    expect((result as { reason: string }).reason).toMatch(/--settings <relay home>\/settings\.json/);
-  });
-
   test("an allow rule is not an ask rule", () => {
     expect(checkLaunch(claude("--settings", "/relay/other.json"), read)).toMatchObject({ ok: false });
   });

@@ -17,6 +17,7 @@ const bobId = generateIdentity("bob");
 const carolId = generateIdentity("carol");
 const bob = makePeer(bobId);
 const OK: LaunchCheck = { ok: true, settings: "/relay/settings.json" };
+const SETTINGS_PATH = "/relay/settings.json";
 const NOW = 1_800_000_000_000;
 
 interface Notification {
@@ -47,6 +48,7 @@ async function setup(
     peers: opts.peers ?? [bob],
     hub,
     launch: () => launch,
+    settingsPath: SETTINGS_PATH,
     now: () => NOW,
     log: (l) => logs.push(l),
   });
@@ -138,12 +140,26 @@ describe("send", () => {
     expect((await call("peers")).text).toContain("send: blocked (claude was launched without --settings)");
   });
 
-  test("the blocked message points at doctor, not the alias, so it doesn't repeat advice the reason already gives", async () => {
-    const reason =
-      "claude was launched without --settings (start it with the claude-relay alias from cc-relay init, or pass --settings <relay home>/settings.json)";
+  test("the blocked message gives a restart remedy naming the real settings path, for a bypass-flag reason", async () => {
+    const reason = "claude was launched with --dangerously-skip-permissions";
     const { call } = await setup({ launch: { ok: false, reason } });
     const r = await call("send", { to: "bob", text: "hi" });
-    expect(r.text).toBe(`blocked: ${reason}. Run \`cc-relay doctor\` for how to fix it.`);
+    expect(r.text).toBe(
+      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${SETTINGS_PATH} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+    );
+    // checkLaunch's reason is a pure diagnosis (see launch.ts) and never
+    // mentions the alias itself, so the remedy here is the only place it
+    // appears - nothing to repeat.
+    expect(r.text.match(/alias/g)).toHaveLength(1);
+  });
+
+  test("the blocked message's remedy also covers a missing ask rule, not just a missing --settings", async () => {
+    const reason = `the last --settings (${SETTINGS_PATH}) lacks permissions.ask ["mcp__cc-relay__send"]`;
+    const { call } = await setup({ launch: { ok: false, reason } });
+    const r = await call("send", { to: "bob", text: "hi" });
+    expect(r.text).toBe(
+      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${SETTINGS_PATH} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+    );
     expect(r.text.match(/alias/g)).toHaveLength(1);
   });
 
@@ -290,6 +306,7 @@ describe("deliver never rejects", () => {
       peers: [bob],
       hub,
       launch: () => OK,
+      settingsPath: SETTINGS_PATH,
       now: () => NaN,
       log: (l) => logs.push(l),
     });
@@ -317,6 +334,7 @@ describe("deliver never rejects", () => {
       peers: [bob],
       hub,
       launch: () => OK,
+      settingsPath: SETTINGS_PATH,
       now: () => NaN,
       log: (l) => logs.push(l),
     });

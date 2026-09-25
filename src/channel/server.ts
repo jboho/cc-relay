@@ -5,7 +5,7 @@ import { fingerprint } from "../protocol/card.js";
 import { type Identity, ALIAS_RE, peerId } from "../protocol/identity.js";
 import { acceptInbound, type InboundFrame, SEEN_TTL_MS } from "../protocol/receive.js";
 import { ReplayGuard } from "../protocol/replay.js";
-import type { HubClient, SendResult } from "./client.js";
+import type { HubClient, HubState, SendResult } from "./client.js";
 import { type StoredPeer, peerMap } from "./config.js";
 import { channelNotification, InboundGate, rateLimitNotice } from "./inbound.js";
 import type { LaunchCheck } from "./launch.js";
@@ -26,6 +26,9 @@ export interface ChannelDeps {
   // (an agent edit could drop the ask rule), so it's re-read on every call rather
   // than trusted from channel startup.
   launch: () => LaunchCheck;
+  // The real --settings path this session should be restarted with, so the
+  // blocked-send remedy can name it instead of a placeholder.
+  settingsPath: string;
   now: () => number;
   log: (line: string) => void;
   gate?: InboundGate;
@@ -36,6 +39,16 @@ const SendArgs = z.object({ to: z.string().regex(ALIAS_RE), text: z.string().min
 
 const text = (t: string): CallToolResult => ({ content: [{ type: "text", text: t }] });
 const fail = (t: string): CallToolResult => ({ content: [{ type: "text", text: t }], isError: true });
+
+// A superseded hub connection can't send even when launch checks pass - the
+// OTHER session with this identity holds the connection - so it's reported
+// as blocked here too, distinct from every other hub state ("connecting" is
+// transient and reconnects on its own).
+function sendStatus(launch: LaunchCheck, hubState: HubState): string {
+  if (!launch.ok) return `send: blocked (${launch.reason})`;
+  if (hubState === "superseded") return "send: blocked (superseded: another session with this identity is connected)";
+  return "send: enabled";
+}
 
 function describeFailure(result: Exclude<SendResult, { ok: true }>, alias: string): string {
   switch (result.error) {
@@ -94,19 +107,9 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
   server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
     if (req.params.name === "peers") {
       const launch = deps.launch();
-      // A superseded hub connection can't send even when launch checks pass -
-      // the OTHER session with this identity holds the connection - so it's
-      // reported as blocked here too, distinct from every other hub state
-      // (disconnected is transient and reconnects on its own).
-      const sendLine =
-        launch.ok && deps.hub.state === "superseded"
-          ? "send: blocked (superseded: another session with this identity is connected)"
-          : launch.ok
-            ? "send: enabled"
-            : `send: blocked (${launch.reason})`;
       const lines = [
         `hub: ${deps.hub.state}`,
-        sendLine,
+        sendStatus(launch, deps.hub.state),
         ...(deps.peers.length === 0
           ? ["no peers yet: add one with `cc-relay add <card>`"]
           : deps.peers.map((p) => `${p.alias}  ${fingerprint(p.signPub, p.boxPub)}`)),
@@ -124,10 +127,11 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
     // by the time this handler runs at all.
     const launch = deps.launch();
     if (!launch.ok) {
-      // The reason already spells out how to fix a missing/broken --settings
-      // (see checkLaunch), so this doesn't repeat that advice — it just points
-      // at doctor for reasons (bypass flags, a missing ask rule) that don't.
-      return fail(`blocked: ${launch.reason}. Run \`cc-relay doctor\` for how to fix it.`);
+      // checkLaunch's reason is a pure diagnosis (no remedy baked in), so the
+      // fix lives here, where the real --settings path is known.
+      return fail(
+        `blocked: ${launch.reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${deps.settingsPath} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+      );
     }
     const args = SendArgs.safeParse(req.params.arguments ?? {});
     if (!args.success) return fail("invalid arguments: send needs {to: <peer alias>, text: <non-empty string>}");
