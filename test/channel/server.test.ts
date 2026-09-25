@@ -24,11 +24,18 @@ interface Notification {
   meta: Record<string, string>;
 }
 
-async function setup(opts: { launch?: LaunchCheck; result?: SendResult; peers?: ReturnType<typeof makePeer>[] } = {}) {
+async function setup(
+  opts: {
+    launch?: LaunchCheck;
+    result?: SendResult;
+    peers?: ReturnType<typeof makePeer>[];
+    hubState?: "connecting" | "ready" | "superseded" | "closed";
+  } = {},
+) {
   const sent: { to: string; sealed: Sealed }[] = [];
   const logs: string[] = [];
   const hub = {
-    state: "ready" as const,
+    state: opts.hubState ?? ("ready" as const),
     send: async (to: string, sealed: Sealed) => {
       sent.push({ to, sealed });
       return opts.result ?? { ok: true as const };
@@ -93,6 +100,21 @@ describe("channel server: what Claude sees", () => {
     const { text } = await call("peers");
     expect(text).toContain(`bob  ${fingerprint(bob.signPub, bob.boxPub)}`);
     expect(text).toContain("hub: ready");
+    expect(text).toContain("send: enabled");
+  });
+
+  test("a superseded hub connection reports send as blocked, even though the launch check passes", async () => {
+    const { call } = await setup({ hubState: "superseded" });
+    const { text } = await call("peers");
+    expect(text).toContain("hub: superseded");
+    expect(text).toContain("send: blocked (superseded: another session with this identity is connected)");
+    expect(text).not.toContain("send: enabled");
+  });
+
+  test("a disconnected hub still reports send as enabled, since it reconnects on its own", async () => {
+    const { call } = await setup({ hubState: "connecting" });
+    const { text } = await call("peers");
+    expect(text).toContain("hub: connecting");
     expect(text).toContain("send: enabled");
   });
 });

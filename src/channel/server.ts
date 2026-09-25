@@ -94,9 +94,19 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
   server.setRequestHandler(CallToolRequestSchema, async (req): Promise<CallToolResult> => {
     if (req.params.name === "peers") {
       const launch = deps.launch();
+      // A superseded hub connection can't send even when launch checks pass -
+      // the OTHER session with this identity holds the connection - so it's
+      // reported as blocked here too, distinct from every other hub state
+      // (disconnected is transient and reconnects on its own).
+      const sendLine =
+        launch.ok && deps.hub.state === "superseded"
+          ? "send: blocked (superseded: another session with this identity is connected)"
+          : launch.ok
+            ? "send: enabled"
+            : `send: blocked (${launch.reason})`;
       const lines = [
         `hub: ${deps.hub.state}`,
-        launch.ok ? "send: enabled" : `send: blocked (${launch.reason})`,
+        sendLine,
         ...(deps.peers.length === 0
           ? ["no peers yet: add one with `cc-relay add <card>`"]
           : deps.peers.map((p) => `${p.alias}  ${fingerprint(p.signPub, p.boxPub)}`)),
