@@ -132,7 +132,12 @@ export function checkLaunch(argv: readonly string[], read: (path: string) => str
     return { ok: false, reason: "claude was launched with --permission-mode bypassPermissions" };
   }
   const settings = flagValues(argv, "--settings");
-  if (settings.length === 0) return { ok: false, reason: "claude was launched without --settings (use the claude-relay alias)" };
+  if (settings.length === 0) {
+    return {
+      ok: false,
+      reason: "claude was launched without --settings (start it with the claude-relay alias from cc-relay init, or pass --settings <relay home>/settings.json)",
+    };
+  }
   // Claude Code keeps only the LAST --settings value when the flag repeats, so
   // that's the only one whose ask rule matters. Every value is still checked
   // for a bypass default and for being readable/valid JSON — those failure

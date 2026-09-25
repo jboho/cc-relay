@@ -116,6 +116,15 @@ describe("send", () => {
     expect((await call("peers")).text).toContain("send: blocked (claude was launched without --settings)");
   });
 
+  test("the blocked message points at doctor, not the alias, so it doesn't repeat advice the reason already gives", async () => {
+    const reason =
+      "claude was launched without --settings (start it with the claude-relay alias from cc-relay init, or pass --settings <relay home>/settings.json)";
+    const { call } = await setup({ launch: { ok: false, reason } });
+    const r = await call("send", { to: "bob", text: "hi" });
+    expect(r.text).toBe(`blocked: ${reason}. Run \`cc-relay doctor\` for how to fix it.`);
+    expect(r.text.match(/alias/g)).toHaveLength(1);
+  });
+
   test("re-checks the launch status on every call, not just once at startup", async () => {
     const { call, setLaunch } = await setup();
     expect(await call("send", { to: "bob", text: "hi" })).toEqual({ text: "sent", isError: false });

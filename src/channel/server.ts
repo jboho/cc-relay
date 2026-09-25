@@ -114,7 +114,10 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
     // by the time this handler runs at all.
     const launch = deps.launch();
     if (!launch.ok) {
-      return fail(`blocked: ${launch.reason}. Start the session with the claude-relay alias, then run \`cc-relay doctor\`.`);
+      // The reason already spells out how to fix a missing/broken --settings
+      // (see checkLaunch), so this doesn't repeat that advice — it just points
+      // at doctor for reasons (bypass flags, a missing ask rule) that don't.
+      return fail(`blocked: ${launch.reason}. Run \`cc-relay doctor\` for how to fix it.`);
     }
     const args = SendArgs.safeParse(req.params.arguments ?? {});
     if (!args.success) return fail("invalid arguments: send needs {to: <peer alias>, text: <non-empty string>}");
