@@ -1,7 +1,7 @@
 {
   "name": "cc-relay",
   "version": "0.0.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
   "bin": {
     "cc-relay": "dist/cli.js"
