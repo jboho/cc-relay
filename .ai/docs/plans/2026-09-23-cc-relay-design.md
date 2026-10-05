@@ -46,7 +46,7 @@
 |---|---|---|
 | Works when | Anywhere with internet. On the same Wi-Fi, Tailscale goes direct and the traffic stays on the local network. | You're both on the same Wi-Fi/LAN, and that network allows device-to-device traffic. |
 | Binds to | Your Tailscale IP only (checked to be in `100.64.0.0/10`) | Your LAN IP only (e.g. `en0`, currently `192.168.1.25`). Refuses `0.0.0.0`. |
-| Guest connects to | `ws://<your-tailscale-name>:<port>/<path>` | `ws://CredMacBook-2.local:<port>/<path>` (hostname) or the IP. The hub itself isn't advertised. |
+| Guest connects to | `ws://<your-tailscale-name>:<port>/<path>` | `ws://your-mac.local:<port>/<path>` (hostname) or the IP. The hub itself isn't advertised. |
 | Network-level check | A **Tailscale grant** lets only the peer's account reach `tcp:<port>` on your Mac. The hub also runs `tailscale whois` on each connection, so the Tailscale user must match that peer's relay key. | None. Anyone on the Wi-Fi can reach the port. |
 | App-level check (both modes) | Signed challenge against the hub's allowlist of relay keys → E2E encryption → the receiving channel's allowlist | Same |
 | Wire encryption | WireGuard (Tailscale) + E2E | E2E only. Metadata is visible to anyone on the Wi-Fi. |
