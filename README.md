@@ -1,8 +1,49 @@
-# cc-relay
+<!-- markdownlint-disable MD033 MD041 -->
 
-Cross-machine, cross-account messaging between interactive Claude Code sessions: a Channels MCP server on each machine and a small end-to-end-encrypted hub on one Mac, reachable over Tailscale or the local network.
+<h1 align="center">cc-relay</h1>
 
-Status: M0–M3 built. M4: automated tests done (protocol, hub, channel server, CLI, `doctor`, local end-to-end test); manual runbook pending. M5 (LAN, live with a peer) and M6 (Tailscale, live) are next. Design: [.ai/docs/plans/2026-09-23-cc-relay-design.md](.ai/docs/plans/2026-09-23-cc-relay-design.md). Build plans: [M0–M2](.ai/docs/plans/2026-09-23-cc-relay-m0-m2.md), [M3–M4](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md).
+<p align="center">
+  <strong>End-to-end-encrypted messaging between interactive Claude Code sessions on different machines and accounts</strong>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-yellow.svg" alt="License: MIT" /></a>
+  <img src="https://img.shields.io/badge/status-experimental-orange.svg" alt="Status: experimental" />
+  <img src="https://img.shields.io/badge/Node-22+-339933?logo=nodedotjs&logoColor=white" alt="Node 22+" />
+  <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" alt="TypeScript 5" />
+  <img src="https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple&logoColor=white" alt="Platform: macOS" />
+</p>
+
+<p align="center">
+  <sub>Claude Code Channels · one small hub · Tailscale or local network · you approve every send</sub>
+</p>
+
+---
+
+> [!WARNING]
+> **Experimental.** cc-relay has been tested on one Mac only: the [manual runbook](.ai/docs/notes/2026-09-23-m4-manual-runbook.md) passed 10 of 10 checks over loopback on Claude Code 2.1.282. Sending between two machines, in LAN or Tailscale mode, has not been tested yet. It also depends on Claude Code's research-preview Channels feature, loaded with `--dangerously-load-development-channels`, which can change or go away in any release. See [Known gaps](#known-gaps) before you rely on it.
+
+## Overview
+
+**cc-relay** lets interactive Claude Code sessions on different machines, signed in to different accounts, message each other. Each machine runs a Channels MCP server, and one Mac runs a small hub that forwards sealed messages. The hub is reachable over Tailscale or the local network and only ever sees ciphertext.
+
+| Topic             | Links                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **License**       | [MIT](LICENSE)                                                                                                                |
+| **Design**        | [cc-relay design and risk list](.ai/docs/plans/2026-09-23-cc-relay-design.md)                                                 |
+| **Build plans**   | [M0–M2](.ai/docs/plans/2026-09-23-cc-relay-m0-m2.md) · [M3–M4](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md) (with "As built") |
+| **Runbook**       | [M4 manual runbook and results](.ai/docs/notes/2026-09-23-m4-manual-runbook.md)                                               |
+| **Security**      | [Report a vulnerability privately](https://github.com/jboho/cc-relay/security/advisories/new)                                 |
+
+## Status
+
+| Milestone | Scope                                                                                  | State      |
+| --------- | -------------------------------------------------------------------------------------- | ---------- |
+| M0        | [Gate](gate/RESULT.md): `permissions.ask` forces a prompt for the `send` tool          | Pass       |
+| M1–M3     | Protocol, hub, channel server, CLI                                                     | Built      |
+| M4        | `doctor`, local end-to-end test, manual runbook on one Mac (10/10)                     | Done       |
+| M5        | LAN mode, live with a peer on a second machine                                         | Not tested |
+| M6        | Tailscale mode, live                                                                   | Not tested |
 
 ## How it fits together
 
@@ -12,17 +53,23 @@ You start a relay session with the `claude-relay` alias. It launches Claude Code
 
 The hub only ever sees ciphertext. It knows who is talking to whom, when, and roughly how much, but not what is said.
 
+## Requirements
+
+- **macOS** — the only platform tested. `doctor` checks the clock against `time.apple.com`.
+- **[Node.js](https://nodejs.org/)** 22+ (`engines` in [`package.json`](package.json))
+- **[pnpm](https://pnpm.io/)**
+- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** with Channels support (research preview)
+- **[Tailscale](https://tailscale.com/)** — only for `--mode tailscale`
+
 ## Install (each machine)
 
-Needs Node 22 or later and pnpm.
-
 ```bash
-git clone <this repo> ~/Code/cc-relay   # or copy it
+git clone https://github.com/jboho/cc-relay.git ~/Code/cc-relay
 cd ~/Code/cc-relay
 pnpm install && pnpm build
 ```
 
-Put a `cc-relay` command on your PATH. Point it at wherever you cloned or copied the repo — the path below assumes `~/Code/cc-relay`. This wrapper records node's full path when you create it, so it keeps working after an `nvm use` or other version switch, and from shells that don't load your `~/.zshrc` (Claude Code's `!` commands, for example):
+Put a `cc-relay` command on your PATH. Point it at wherever you cloned the repo — the path below assumes `~/Code/cc-relay`. This wrapper records node's full path when you create it, so it keeps working after an `nvm use` or other version switch, and from shells that don't load your `~/.zshrc` (Claude Code's `!` commands, for example):
 
 ```bash
 mkdir -p ~/.local/bin
@@ -56,6 +103,8 @@ cc-relay init --alias bob
 ```bash
 alias claude-relay='claude --mcp-config ~/.config/cc-relay/mcp.json --settings ~/.config/cc-relay/settings.json --permission-mode manual --dangerously-load-development-channels server:cc-relay'
 ```
+
+Claude Code requires `--dangerously-load-development-channels` while Channels is in research preview. The flag, or the Channels protocol, can change in a future Claude Code release, and that is the part of cc-relay most likely to break.
 
 ## Pair
 
@@ -116,14 +165,36 @@ The hub check sends a hello and stops at the hub's challenge. It never completes
 - **The fingerprint covers the keys, not the hub address.** Someone who swaps the address in a host card can point the guest at a different server. That server can't read messages or pass as the host's peers. The guest just won't reach anyone, and `doctor` will show the hub check failing.
 - **Only one relay session per identity at a time.** A second `claude-relay` session takes over the hub connection. The first one stops receiving, and its `send` and `peers` tools say it was replaced. Restart it to take the connection back.
 - **The hub stops on an internal error on purpose**, rather than keep running in a bad state. Restart it with `cc-relay hub`.
-- **A peer's message can't run anything by itself.** It's untrusted text that reaches Claude and can try to steer it — prompt injection. The escaping that stops a peer from forging its own `<channel>` tag has a known gap too: it doesn't catch lookalike letters borrowed from another script. Anything your other settings already allow without asking, such as allow rules in `~/.claude/settings.json` (which still load next to `--settings`) or auto/acceptEdits mode, could run because of it. Keep relay sessions in manual mode, and read each send prompt before approving: a send can carry data out.
+- **A peer's message can't run anything by itself.** It's untrusted text that reaches Claude and can try to steer it — prompt injection. Anything your other settings already allow without asking, such as allow rules in `~/.claude/settings.json` (which still load next to `--settings`) or auto/acceptEdits mode, could run because of it. Keep relay sessions in manual mode, and read each send prompt before approving: a send can carry data out.
+
+## Known gaps
+
+From the [M3–M4 "As built" notes](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md#known-limits-and-residual-risks):
+
+- **Replay after a restart.** Each channel keeps its seen-message cache in memory. Someone who controls the hub, or a machine on the LAN path, can force a channel to reconnect and then replay one of a peer's real messages from the last 5–10 minutes, which shows up as new. The planned fix keeps the cache in a 0600 file under the relay home.
+- **Lookalike letters.** The escaping that stops a peer from forging its own `<channel>` tag doesn't catch lookalike letters from other scripts (for example, Cyrillic "с").
+- **Port race.** When no `--port` is given, the hub probes a free port, releases it, then binds it, so another process can take it in between. This showed up once in the tests as `EADDRINUSE`; re-run `cc-relay hub`, or pass `--port`.
+- **Hand-edited `peers.json`.** A file edited by hand, or written before the reserved-alias rule, can still hold a reserved alias. If the file is missing, `add` doesn't recreate it; the error says how to create it.
+- **Two machines untested.** Everything above was checked on one Mac over loopback. LAN and Tailscale between two machines are the next milestones (M5, M6).
 
 ## Development
 
 ```bash
-command pnpm test        # vitest (includes a local end-to-end run: real hub process + two channel processes)
-command pnpm typecheck
-command pnpm build
+pnpm test        # vitest (includes a local end-to-end run: real hub process + two channel processes)
+pnpm typecheck
+pnpm build
 ```
 
-In Claude Code's shell, use `command pnpm`, not `pnpm` (a shell wrapper there fails).
+## Tech stack
+
+| Layer    | Details                                                                       |
+| -------- | ----------------------------------------------------------------------------- |
+| Runtime  | Node 22+, TypeScript, ES modules                                              |
+| Channel  | [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk) (Claude Code Channels) |
+| Crypto   | [TweetNaCl](https://tweetnacl.js.org/) (`sign` for identity, `box` for message encryption)               |
+| Hub      | [`ws`](https://github.com/websockets/ws) WebSocket server                     |
+| Testing  | [Vitest](https://vitest.dev/)                                                 |
+
+## License
+
+Published under the [MIT License](LICENSE).
