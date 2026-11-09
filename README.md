@@ -21,7 +21,7 @@
 ---
 
 > [!WARNING]
-> **Experimental.** cc-relay has been tested on one Mac only: the [manual runbook](.ai/docs/notes/2026-09-23-m4-manual-runbook.md) passed 10 of 10 checks over loopback on Claude Code 2.1.282. Sending between two machines, in LAN or Tailscale mode, has not been tested yet. It also depends on Claude Code's research-preview Channels feature, loaded with `--dangerously-load-development-channels`, which can change or go away in any release. See [Known gaps](#known-gaps) before you rely on it.
+> **Experimental.** The [manual runbook](.ai/docs/notes/2026-09-23-m4-manual-runbook.md) passed 10 of 10 checks over loopback on one Mac, on Claude Code 2.1.282. On 2026-11-09, one message went each way between two machines on the same Wi-Fi in LAN mode. The full runbook has not been run on two machines, and Tailscale mode has not been tested. It also depends on Claude Code's research-preview Channels feature, loaded with `--dangerously-load-development-channels`, which can change or go away in any release. See [Known gaps](#known-gaps) before you rely on it.
 
 ## Overview
 
@@ -42,7 +42,7 @@
 | M0        | [Gate](gate/RESULT.md): `permissions.ask` forces a prompt for the `send` tool          | Pass       |
 | M1–M3     | Protocol, hub, channel server, CLI                                                     | Built      |
 | M4        | `doctor`, local end-to-end test, manual runbook on one Mac (10/10)                     | Done       |
-| M5        | LAN mode, live with a peer on a second machine                                         | Not tested |
+| M5        | LAN mode, live with a peer on a second machine (one message each way, 2026-11-09)      | Pass       |
 | M6        | Tailscale mode, live                                                                   | Not tested |
 
 ## How it fits together
@@ -175,7 +175,7 @@ From the [M3–M4 "As built" notes](.ai/docs/plans/2026-09-23-cc-relay-m3-m4.md#
 - **Lookalike letters.** The escaping that stops a peer from forging its own `<channel>` tag doesn't catch lookalike letters from other scripts (for example, Cyrillic "с").
 - **Port race.** When no `--port` is given, the hub probes a free port, releases it, then binds it, so another process can take it in between. This showed up once in the tests as `EADDRINUSE`; re-run `cc-relay hub`, or pass `--port`.
 - **Hand-edited `peers.json`.** A file edited by hand, or written before the reserved-alias rule, can still hold a reserved alias. If the file is missing, `add` doesn't recreate it; the error says how to create it.
-- **Two machines untested.** Everything above was checked on one Mac over loopback. LAN and Tailscale between two machines are the next milestones (M5, M6).
+- **Two machines barely tested.** Beyond one message each way over LAN between two machines (M5), everything above was checked on one Mac over loopback. Tailscale between two machines is the next milestone (M6).
 
 ## Development
 
