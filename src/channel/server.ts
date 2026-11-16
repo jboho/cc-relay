@@ -9,6 +9,7 @@ import type { HubClient, HubState, SendResult } from "./client.js";
 import { type StoredPeer, peerMap } from "./config.js";
 import { channelNotification, InboundGate, rateLimitNotice } from "./inbound.js";
 import type { LaunchCheck } from "./launch.js";
+import { shellQuote } from "../shell-quote.js";
 import { sealFor } from "./outbound.js";
 
 export const INSTRUCTIONS = [
@@ -130,7 +131,7 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
       // checkLaunch's reason is a pure diagnosis (no remedy baked in), so the
       // fix lives here, where the real --settings path is known.
       return fail(
-        `blocked: ${launch.reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${deps.settingsPath} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+        `blocked: ${launch.reason}. Restart this session with the claude-relay alias from cc-relay init, or with claude --settings ${shellQuote(deps.settingsPath)} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
       );
     }
     const args = SendArgs.safeParse(req.params.arguments ?? {});

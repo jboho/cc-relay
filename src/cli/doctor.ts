@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { shellQuote } from "../shell-quote.js";
 import { type HubMode } from "../hub/bind.js";
 import { type Interfaces, resolveBindHost } from "../hub/netif.js";
 import { resolveTailscale, type ResolvedTailscale } from "../hub/tailscale.js";
@@ -137,7 +138,7 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
       add(
         "FAIL",
         "session",
-        `${launch.reason}; send is blocked in this session. Restart it with the claude-relay alias from cc-relay init, or with claude --settings ${p.settings} and no bypass flags`,
+        `${launch.reason}; send is blocked in this session. Restart it with the claude-relay alias from cc-relay init, or with claude --settings ${shellQuote(p.settings)} and no bypass flags`,
       );
     }
   }
