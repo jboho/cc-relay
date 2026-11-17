@@ -360,8 +360,9 @@ describe("probe helpers", () => {
     expect(await probeHub(`ws://127.0.0.1:${port}/${"P".repeat(22)}`, self.signPub, self, 3000)).toBe("rejected");
   });
 
-  test("probeHub reports an unmapped socket error as unreachable, not rejected", async () => {
-    // Port 0 gives EADDRNOTAVAIL on macOS (cc-relay's platform); Linux may refuse instead.
+  // Port 0 gives EADDRNOTAVAIL on macOS (cc-relay's platform); Linux refuses
+  // instead (ECONNREFUSED), which probeHub correctly reports as "refused".
+  test.skipIf(process.platform !== "darwin")("probeHub reports an unmapped socket error as unreachable, not rejected", async () => {
     const self = generateIdentity("x");
     expect(await probeHub(`ws://127.0.0.1:0/${"P".repeat(22)}`, self.signPub, self, 1000)).toBe("unreachable");
   });
