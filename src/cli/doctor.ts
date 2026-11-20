@@ -20,6 +20,7 @@ import { fingerprint } from "../protocol/card.js";
 import type { Identity } from "../protocol/identity.js";
 import type { Io } from "./io.js";
 import { canConnect, probeHub, type ProbeOutcome, sntpOffset } from "./probe.js";
+import { shellQuote } from "../shell-quote.js";
 
 export type Status = "PASS" | "WARN" | "FAIL" | "SKIP";
 
@@ -137,7 +138,7 @@ export async function runChecks(io: Io, deps: DoctorDeps = {}): Promise<Check[]>
       add(
         "FAIL",
         "session",
-        `${launch.reason}; send is blocked in this session. Restart it with the claude-relay alias from cc-relay init, or with claude --settings ${p.settings} and no bypass flags`,
+        `${launch.reason}; send is blocked in this session. Restart it with the claude-relay alias from cc-relay init, or with claude --settings ${shellQuote(p.settings)} and no bypass flags`,
       );
     }
   }
