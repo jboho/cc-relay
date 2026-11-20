@@ -7,6 +7,7 @@ import { makePeer } from "../../src/channel/config.js";
 import { INBOUND_PER_MIN } from "../../src/channel/inbound.js";
 import type { LaunchCheck } from "../../src/channel/launch.js";
 import { createChannelServer, INSTRUCTIONS } from "../../src/channel/server.js";
+import { shellQuote } from "../../src/shell-quote.js";
 import { fingerprint } from "../../src/protocol/card.js";
 import { newMessageId, open, type Sealed, seal } from "../../src/protocol/envelope.js";
 import { generateIdentity, type Identity, peerId } from "../../src/protocol/identity.js";
@@ -145,7 +146,7 @@ describe("send", () => {
     const { call } = await setup({ launch: { ok: false, reason } });
     const r = await call("send", { to: "bob", text: "hi" });
     expect(r.text).toBe(
-      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${SETTINGS_PATH} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with claude --settings ${shellQuote(SETTINGS_PATH)} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
     );
     // checkLaunch's reason is a pure diagnosis (see launch.ts) and never
     // mentions the alias itself, so the remedy here is the only place it
@@ -158,9 +159,15 @@ describe("send", () => {
     const { call } = await setup({ launch: { ok: false, reason } });
     const r = await call("send", { to: "bob", text: "hi" });
     expect(r.text).toBe(
-      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with --settings ${SETTINGS_PATH} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
+      `blocked: ${reason}. Restart this session with the claude-relay alias from cc-relay init, or with claude --settings ${shellQuote(SETTINGS_PATH)} and no bypass flags; run \`! cc-relay doctor\` inside it to check`,
     );
     expect(r.text.match(/alias/g)).toHaveLength(1);
+  });
+
+  test("the blocked message quotes a path with a space", async () => {
+    const SPACED = "/relay/path with space/settings.json";
+    // Verify shellQuote handles spaces in the settings path:
+    expect(shellQuote(SPACED)).toBe("\x27/relay/path with space/settings.json\x27");
   });
 
   test("re-checks the launch status on every call, not just once at startup", async () => {
