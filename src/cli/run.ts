@@ -109,6 +109,9 @@ export interface ChannelRunDeps {
   ppid?: number;
   lookup?: ProcLookup;
   interfaces?: Interfaces;
+  // Tests pass a short timeout so shutdown doesn't wait for ackTimeoutMs's
+  // 10 s default; omitted in production (defaults to 10_000 inside HubClient).
+  ackTimeoutMs?: number;
 }
 
 // stdout belongs to the MCP transport: everything human-readable goes to stderr,
@@ -147,6 +150,7 @@ export async function channel(io: Io, deps: ChannelRunDeps = {}): Promise<number
     identity: self,
     onMessage: (frame) => void deliver(frame),
     log: io.err,
+    ...(deps.ackTimeoutMs !== undefined ? { ackTimeoutMs: deps.ackTimeoutMs } : {}),
   });
   const created = createChannelServer({
     identity: self,
