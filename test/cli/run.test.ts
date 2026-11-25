@@ -210,11 +210,11 @@ describe("channel command", () => {
     const bob = await session(bobHome);
     await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
 
-    expect(await bob.call("send", { to: "alice", text: "hi from bob" })).toBe("sent");
+    expect(await bob.call("send", { to: "alice", text: "hi from bob" })).toBe("sent: the hub handed it to alice's relay connection, which doesn't confirm alice's session saw it");
     await waitFor(() => alice.notes.length === 1);
     expect(alice.notes[0]).toMatchObject({ content: "hi from bob", meta: { from: "bob" } });
 
-    expect(await alice.call("send", { to: "bob", text: "hi back" })).toBe("sent");
+    expect(await alice.call("send", { to: "bob", text: "hi back" })).toBe("sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it");
     await waitFor(() => bob.notes.length === 1);
     expect(bob.notes[0]).toMatchObject({ content: "hi back", meta: { from: "alice" } });
   });
@@ -236,7 +236,7 @@ describe("channel command", () => {
     expect(bob.io.stderr[0]).toMatch(/^cc-relay: send is blocked: claude was launched without --settings/);
     await waitFor(() => bob.io.stderr.includes("cc-relay: connected to hub"));
     expect(await bob.call("send", { to: "alice", text: "sneaky" })).toMatch(/^blocked: /);
-    expect(await alice.call("send", { to: "bob", text: "still reaches you" })).toBe("sent");
+    expect(await alice.call("send", { to: "bob", text: "still reaches you" })).toBe("sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it");
     await waitFor(() => bob.notes.length === 1);
     expect(alice.notes).toEqual([]);
   });
@@ -270,7 +270,7 @@ describe("channel command", () => {
     const alice = await session(aliceHome);
     const bob = await session(bobHome);
     await waitFor(() => bob.io.stderr.includes("cc-relay: connected to hub") && alice.io.stderr.includes("cc-relay: connected to hub"));
-    expect(await bob.call("send", { to: "alice", text: "hi" })).toBe("sent");
+    expect(await bob.call("send", { to: "alice", text: "hi" })).toBe("sent: the hub handed it to alice's relay connection, which doesn't confirm alice's session saw it");
 
     const settingsPath = paths(bobHome).settings;
     const original = readFileSync(settingsPath, "utf8");
@@ -281,7 +281,7 @@ describe("channel command", () => {
     } finally {
       writeFileSync(settingsPath, original);
     }
-    expect(await bob.call("send", { to: "alice", text: "back again" })).toBe("sent");
+    expect(await bob.call("send", { to: "alice", text: "back again" })).toBe("sent: the hub handed it to alice's relay connection, which doesn't confirm alice's session saw it");
     expect(await bob.call("peers")).toContain("send: enabled");
   });
 
