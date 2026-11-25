@@ -159,11 +159,11 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
     const alice = await session(hostHome);
     const bob = await session(guestHome);
 
-    expect(await bob.send("alice", "hello from bob")).toBe("sent");
+    expect(await bob.send("alice", "hello from bob")).toBe("sent: the hub handed it to alice's relay connection, which doesn't confirm alice's session saw it");
     await waitFor(() => alice.notes.length === 1);
     expect(alice.notes[0]).toMatchObject({ content: "hello from bob", meta: { from: "bob" } });
 
-    expect(await alice.send("bob", "hello from alice")).toBe("sent");
+    expect(await alice.send("bob", "hello from alice")).toBe("sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it");
     await waitFor(() => bob.notes.length === 1);
     expect(bob.notes[0]).toMatchObject({ content: "hello from alice", meta: { from: "alice" } });
   }, 30_000);
@@ -174,7 +174,7 @@ describe("cc-relay end to end: real hub process, channels launched the way Claud
     const bob = await session(guestHome, { withSettings: false });
     expect(bob.stderr()).toContain("cc-relay: send is blocked: claude was launched without --settings");
     expect(await bob.send("alice", "sneaky")).toMatch(/^blocked: /);
-    expect(await alice.send("bob", "you can still hear me")).toBe("sent");
+    expect(await alice.send("bob", "you can still hear me")).toBe("sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it");
     await waitFor(() => bob.notes.length === 1);
     // Not a race: bob's blocked send fails in the channel's own launch check
     // (src/channel/server.ts) before it ever calls hub.send, so nothing

@@ -125,7 +125,7 @@ describe("channel server: what Claude sees", () => {
 describe("send", () => {
   test("seals for the named peer and reports sent", async () => {
     const { call, sent } = await setup();
-    expect(await call("send", { to: "bob", text: "hi bob" })).toEqual({ text: "sent", isError: false });
+    expect(await call("send", { to: "bob", text: "hi bob" })).toEqual({ text: "sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it", isError: false });
     expect(sent).toHaveLength(1);
     expect(sent[0]?.to).toBe(bob.id);
     const inner = open(sent[0]!.sealed, alice.boxPub, bobId.boxSec);
@@ -173,14 +173,14 @@ describe("send", () => {
 
   test("re-checks the launch status on every call, not just once at startup", async () => {
     const { call, setLaunch } = await setup();
-    expect(await call("send", { to: "bob", text: "hi" })).toEqual({ text: "sent", isError: false });
+    expect(await call("send", { to: "bob", text: "hi" })).toEqual({ text: "sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it", isError: false });
     setLaunch({ ok: false, reason: "claude was launched without --settings" });
     const blocked = await call("send", { to: "bob", text: "sneaky" });
     expect(blocked.isError).toBe(true);
     expect(blocked.text).toMatch(/^blocked: claude was launched without --settings/);
     expect((await call("peers")).text).toContain("send: blocked (claude was launched without --settings)");
     setLaunch({ ok: true, settings: "/relay/settings.json" });
-    expect(await call("send", { to: "bob", text: "back again" })).toEqual({ text: "sent", isError: false });
+    expect(await call("send", { to: "bob", text: "back again" })).toEqual({ text: "sent: the hub handed it to bob's relay connection, which doesn't confirm bob's session saw it", isError: false });
     expect((await call("peers")).text).toContain("send: enabled");
   });
 
