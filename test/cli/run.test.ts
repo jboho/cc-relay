@@ -93,10 +93,15 @@ interface Session {
   done: Promise<number>;
 }
 
-async function session(home: string, settings: string | null = paths(home).settings, lookup: ProcLookup = launchedWith(settings)): Promise<Session> {
+async function session(
+  home: string,
+  settings: string | null = paths(home).settings,
+  lookup: ProcLookup = launchedWith(settings),
+  opts: { ackTimeoutMs?: number } = {},
+): Promise<Session> {
   const io = fakeIo(home);
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
-  const done = channel(io, { transport: serverSide, ppid: 4242, lookup, ackTimeoutMs: 500 });
+  const done = channel(io, { transport: serverSide, ppid: 4242, lookup, ...opts });
   const client = new Client({ name: "test", version: "0" });
   const notes: Session["notes"] = [];
   client.setNotificationHandler(z.object({ method: z.literal("notifications/claude/channel"), params: z.any() }), (n) => {
@@ -303,7 +308,7 @@ describe("channel command", () => {
     "stops when told to, and releases both the hub connection and the MCP session",
     async () => {
       const { aliceHome, bobHome } = await pair();
-      const alice = await session(aliceHome);
+      const alice = await session(aliceHome, undefined, undefined, { ackTimeoutMs: 500 });
       const bob = await session(bobHome);
       await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
 
@@ -320,8 +325,10 @@ describe("channel command", () => {
 
       // Proves client.stop() actually ran: the hub's websocket to bob closed,
       // so the hub now sees bob as offline instead of still routing to it.
-      // Pass ackTimeoutMs=500 so shutdown completes quickly rather than
-      // waiting for HubClient's 10 s default.
+      // Until the hub notices bob's socket closed, alice's send waits for an
+      // ack that never comes. alice's 500 ms ack timeout keeps each attempt
+      // short, so retryUntil's 3 s default and vitest's 5 s test timeout are
+      // enough.
       const result = await retryUntil(
         () => alice.call("send", { to: "bob", text: "are you still there?" }),
         (text) => text.startsWith("offline: "),
