@@ -93,10 +93,15 @@ interface Session {
   done: Promise<number>;
 }
 
-async function session(home: string, settings: string | null = paths(home).settings, lookup: ProcLookup = launchedWith(settings)): Promise<Session> {
+async function session(
+  home: string,
+  settings: string | null = paths(home).settings,
+  lookup: ProcLookup = launchedWith(settings),
+  opts: { ackTimeoutMs?: number } = {},
+): Promise<Session> {
   const io = fakeIo(home);
   const [serverSide, clientSide] = InMemoryTransport.createLinkedPair();
-  const done = channel(io, { transport: serverSide, ppid: 4242, lookup });
+  const done = channel(io, { transport: serverSide, ppid: 4242, lookup, ...opts });
   const client = new Client({ name: "test", version: "0" });
   const notes: Session["notes"] = [];
   client.setNotificationHandler(z.object({ method: z.literal("notifications/claude/channel"), params: z.any() }), (n) => {
@@ -303,7 +308,7 @@ describe("channel command", () => {
     "stops when told to, and releases both the hub connection and the MCP session",
     async () => {
       const { aliceHome, bobHome } = await pair();
-      const alice = await session(aliceHome);
+      const alice = await session(aliceHome, undefined, undefined, { ackTimeoutMs: 500 });
       const bob = await session(bobHome);
       await waitFor(() => alice.io.stderr.includes("cc-relay: connected to hub") && bob.io.stderr.includes("cc-relay: connected to hub"));
 
@@ -320,19 +325,15 @@ describe("channel command", () => {
 
       // Proves client.stop() actually ran: the hub's websocket to bob closed,
       // so the hub now sees bob as offline instead of still routing to it.
-      // Each attempt can take as long as the client's 10s ack timeout if the
-      // hub hasn't yet noticed bob's socket closed, so retryUntil needs more
-      // than its 3s default -- but its budget plus one more in-flight 10s
-      // attempt must still fit under this test's 20_000 timeout (8 + 10 +
-      // margin < 20), or vitest kills the test first and reports its own
-      // generic timeout instead of retryUntil's real "timed out" message.
+      // Until the hub notices bob's socket closed, alice's send waits for an
+      // ack that never comes. alice's 500 ms ack timeout keeps each attempt
+      // short, so retryUntil's 3 s default and vitest's 5 s test timeout are
+      // enough.
       const result = await retryUntil(
         () => alice.call("send", { to: "bob", text: "are you still there?" }),
         (text) => text.startsWith("offline: "),
-        8_000,
       );
       expect(result).toMatch(/^offline: bob has no relay session connected$/);
     },
-    20_000,
   );
 });
