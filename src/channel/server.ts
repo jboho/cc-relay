@@ -144,7 +144,7 @@ export function createChannelServer(deps: ChannelDeps): { server: Server; delive
     const sealed = sealFor(deps.identity, peer, args.data.text, deps.now());
     if (!sealed.ok) return fail(sealed.error);
     const result = await deps.hub.send(peer.id, sealed.sealed);
-    return result.ok ? text("sent") : fail(describeFailure(result, peer.alias));
+    return result.ok ? text(`sent: the hub handed it to ${peer.alias}'s relay connection, which doesn't confirm ${peer.alias}'s session saw it`) : fail(describeFailure(result, peer.alias));
   });
 
   async function deliver(frame: InboundFrame): Promise<void> {
