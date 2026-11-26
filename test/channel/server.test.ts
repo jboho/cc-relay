@@ -114,6 +114,23 @@ describe("channel server: what Claude sees", () => {
     expect(text).not.toContain("send: enabled");
   });
 
+  test("a closed hub connection reports send as blocked, since it won't reconnect", async () => {
+    const { call } = await setup({ hubState: "closed" });
+    const { text } = await call("peers");
+    expect(text).toContain("hub: closed");
+    expect(text).toContain("send: blocked (the hub connection is closed)");
+    expect(text).not.toContain("send: enabled");
+  });
+
+  test("a failed launch check takes precedence over a closed hub connection", async () => {
+    const { call } = await setup({ hubState: "closed", launch: { ok: false, reason: "claude was launched without --settings" } });
+    const { text } = await call("peers");
+    expect(text).toContain("hub: closed");
+    expect(text).toContain("send: blocked (claude was launched without --settings)");
+    expect(text).not.toContain("send: blocked (the hub connection is closed)");
+    expect(text).not.toContain("send: enabled");
+  });
+
   test("a disconnected hub still reports send as enabled, since it reconnects on its own", async () => {
     const { call } = await setup({ hubState: "connecting" });
     const { text } = await call("peers");
