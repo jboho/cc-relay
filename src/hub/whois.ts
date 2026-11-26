@@ -10,13 +10,23 @@ export interface Whois {
 // Only the field we use. `tailscale whois --json` prints more; zod strips it.
 const WhoisJson = z.object({ UserProfile: z.object({ LoginName: z.string().min(1) }) });
 
-export function parseWhois(stdout: string): string | null {
+// Distinguishes "not JSON" from "JSON without a login": an operator reading the
+// hub log needs to tell a broken `tailscale whois` apart from a node with no
+// login.
+export type ParsedWhois =
+  | { kind: "login"; login: string }
+  | { kind: "no-json" }
+  | { kind: "no-login" };
+
+export function parseWhois(stdout: string): ParsedWhois {
+  let value: unknown;
   try {
-    const parsed = WhoisJson.safeParse(JSON.parse(stdout));
-    return parsed.success ? parsed.data.UserProfile.LoginName : null;
+    value = JSON.parse(stdout);
   } catch {
-    return null;
+    return { kind: "no-json" };
   }
+  const parsed = WhoisJson.safeParse(value);
+  return parsed.success ? { kind: "login", login: parsed.data.UserProfile.LoginName } : { kind: "no-login" };
 }
 
 export interface WhoisOptions {
@@ -54,9 +64,16 @@ export function tailscaleWhois({ bin = "tailscale", timeoutMs = 2000, onError }:
               reportSafely(onError, `whois ${address}:${port} failed: ${err.message.split("\n")[0]}`);
               return resolve(null);
             }
-            const login = parseWhois(stdout);
-            if (login === null) reportSafely(onError, `whois ${address}:${port} printed no login`);
-            resolve(login);
+            const parsed = parseWhois(stdout);
+            if (parsed.kind === "login") {
+              resolve(parsed.login);
+            } else if (parsed.kind === "no-json") {
+              reportSafely(onError, `whois ${address}:${port} printed output that isn't JSON`);
+              resolve(null);
+            } else {
+              reportSafely(onError, `whois ${address}:${port} printed no login`);
+              resolve(null);
+            }
           });
         } catch (err) {
           // execFile itself can throw synchronously for a malformed bin
