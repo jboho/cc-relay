@@ -44,10 +44,13 @@ const fail = (t: string): CallToolResult => ({ content: [{ type: "text", text: t
 // A superseded hub connection can't send even when launch checks pass - the
 // OTHER session with this identity holds the connection - so it's reported
 // as blocked here too, distinct from every other hub state ("connecting" is
-// transient and reconnects on its own).
+// transient and reconnects on its own). A closed hub connection (HubClient.stop())
+// stays closed and won't reconnect, so it can't send either and is reported
+// blocked too, rather than lying that send is enabled.
 function sendStatus(launch: LaunchCheck, hubState: HubState): string {
   if (!launch.ok) return `send: blocked (${launch.reason})`;
   if (hubState === "superseded") return "send: blocked (superseded: another session with this identity is connected)";
+  if (hubState === "closed") return "send: blocked (the hub connection is closed)";
   return "send: enabled";
 }
 
