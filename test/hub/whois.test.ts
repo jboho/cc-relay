@@ -28,13 +28,15 @@ afterAll(() => {
 
 describe("parseWhois", () => {
   test("extracts the login name", () => {
-    expect(parseWhois(SAMPLE)).toBe("peer@example.com");
+    expect(parseWhois(SAMPLE)).toEqual({ status: "ok", login: "peer@example.com" });
   });
 
-  test("returns null for bad JSON or a missing login", () => {
-    expect(parseWhois("nope")).toBeNull();
-    expect(parseWhois(JSON.stringify({ UserProfile: {} }))).toBeNull();
-    expect(parseWhois(JSON.stringify({ UserProfile: { LoginName: "" } }))).toBeNull();
+  test("distinguishes not-JSON from JSON without a login", () => {
+    expect(parseWhois("nope")).toEqual({ status: "not-json" });
+    expect(parseWhois(JSON.stringify({ UserProfile: {} }))).toEqual({ status: "no-login" });
+    expect(parseWhois(JSON.stringify({ UserProfile: { LoginName: "" } }))).toEqual({
+      status: "no-login",
+    });
   });
 });
 
@@ -91,6 +93,14 @@ describe("tailscaleWhois", () => {
     expect(reasons[0]).toMatch(/^whois 100\.64\.0\.5:1 failed: /);
     expect(reasons[1]).toBe("whois 100.64.0.5:2 printed no login");
     expect(reasons[2]).toMatch(/not an IPv4 address/);
+  });
+
+  test("reports a non-JSON output as 'isn't JSON' without echoing the output", async () => {
+    const reasons: string[] = [];
+    const onError = (reason: string) => reasons.push(reason);
+    expect(await tailscaleWhois({ bin: fakeTailscale("echo nope"), onError }).loginFor("100.64.0.5", 1)).toBeNull();
+    expect(reasons).toEqual(["whois 100.64.0.5:1 printed output that isn't JSON"]);
+    expect(reasons[0]).not.toContain("nope");
   });
 
   test("still resolves null and throws nothing when onError itself throws", async () => {

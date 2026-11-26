@@ -10,13 +10,23 @@ export interface Whois {
 // Only the field we use. `tailscale whois --json` prints more; zod strips it.
 const WhoisJson = z.object({ UserProfile: z.object({ LoginName: z.string().min(1) }) });
 
-export function parseWhois(stdout: string): string | null {
+// Distinguishes "the output wasn't JSON" from "JSON, but no usable login", so
+// the caller can report a precise reason without echoing the raw output back.
+export type ParsedWhois =
+  | { status: "ok"; login: string }
+  | { status: "not-json" }
+  | { status: "no-login" };
+
+export function parseWhois(stdout: string): ParsedWhois {
+  let value: unknown;
   try {
-    const parsed = WhoisJson.safeParse(JSON.parse(stdout));
-    return parsed.success ? parsed.data.UserProfile.LoginName : null;
+    value = JSON.parse(stdout);
   } catch {
-    return null;
+    return { status: "not-json" };
   }
+  const parsed = WhoisJson.safeParse(value);
+  if (!parsed.success) return { status: "no-login" };
+  return { status: "ok", login: parsed.data.UserProfile.LoginName };
 }
 
 export interface WhoisOptions {
@@ -54,9 +64,16 @@ export function tailscaleWhois({ bin = "tailscale", timeoutMs = 2000, onError }:
               reportSafely(onError, `whois ${address}:${port} failed: ${err.message.split("\n")[0]}`);
               return resolve(null);
             }
-            const login = parseWhois(stdout);
-            if (login === null) reportSafely(onError, `whois ${address}:${port} printed no login`);
-            resolve(login);
+            const parsed = parseWhois(stdout);
+            if (parsed.status !== "ok") {
+              const reason =
+                parsed.status === "not-json"
+                  ? `whois ${address}:${port} printed output that isn't JSON`
+                  : `whois ${address}:${port} printed no login`;
+              reportSafely(onError, reason);
+              return resolve(null);
+            }
+            resolve(parsed.login);
           });
         } catch (err) {
           // execFile itself can throw synchronously for a malformed bin
