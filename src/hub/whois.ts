@@ -12,7 +12,7 @@ const WhoisJson = z.object({ UserProfile: z.object({ LoginName: z.string().min(1
 
 // Distinguishes "not JSON" from "JSON without a login": an operator reading the
 // hub log needs to tell a broken `tailscale whois` apart from a node with no
-// login, and both currently collapse into a single "printed no login".
+// login.
 export type ParsedWhois =
   | { kind: "login"; login: string }
   | { kind: "no-json" }
